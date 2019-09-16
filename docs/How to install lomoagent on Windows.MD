@@ -18,9 +18,9 @@ in the End-User License Agreement, please checked the box as below:
 ![Accept](./resource/finish.png)
 
 ## 4.Start lomoagent
-Now you should see the lomoagent icon on your desktop, you can double click the start the lomoagent.
+Now you should see the lomoagent icon on your desktop, you can double click to start the lomoagent.
 
-If you meet below dialog popuped up by the Windows os, please click the Allow access.
+If you meet below dialog popuped up by the Windows os, please select "Private ..." one and click the Allow access.
 
 ![Firewall](./resource/Firewall.png)
 
