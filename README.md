@@ -13,7 +13,7 @@ Lomorage Server on Windows
 
 ### Add the language translator in L10N.json file 
 
-1. Open the L10N.json file which in the same folder of the Lomorage.exe
+1. Open the L10N.json file which in the same folder of the lomoagent.exe
 
 2. Add the language you want
 
