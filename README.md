@@ -1,6 +1,9 @@
 # LomoAgentWin
 Lomorage Server on Windows
 
+# Latest update:
+**08/09/2021**
+
 ## Lomorage Server Localization
 ## (Lomorage 服务器程序多语言支持)
 
