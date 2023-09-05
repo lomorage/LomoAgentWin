@@ -4,6 +4,8 @@
   "description": "web photo viewer",
   "main": "index.js",
   "scripts": {
+    "start": "cross-env NODE_ENV=development webpack-dev-server --config ./scripts/config/webpack.dev.js",
+    "build": "cross-env NODE_ENV=production webpack --config ./scripts/config/webpack.prod.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "lint": "npm run lint-eslint && npm run lint-stylelint",
     "lint-eslint": "eslint -c .eslintrc.js --ext .ts,.tsx,.js src",
@@ -22,6 +24,7 @@
   "homepage": "https://github.com/lomolomo2/WebPhotoViewer#readme",
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^6.6.0",
+    "cross-env": "^7.0.3",
     "eslint": "^8.48.0",
     "eslint-config-airbnb": "^19.0.4",
     "eslint-config-prettier": "^9.0.0",
@@ -31,12 +34,17 @@
     "eslint-plugin-promise": "^6.1.1",
     "eslint-plugin-react": "^7.33.2",
     "eslint-plugin-unicorn": "^48.0.1",
+    "html-webpack-plugin": "^5.5.3",
     "prettier": "^3.0.3",
     "stylelint": "^15.10.3",
     "stylelint-config-rational-order": "^0.1.2",
     "stylelint-config-standard": "^34.0.0",
     "stylelint-declaration-block-no-ignored-properties": "^2.7.0",
     "stylelint-order": "^6.0.3",
-    "typescript": "^5.2.2"
+    "typescript": "^5.2.2",
+    "webpack": "^5.88.2",
+    "webpack-cli": "^5.1.4",
+    "webpack-dev-server": "^4.15.1",
+    "webpack-merge": "^5.9.0"
   }
 }
