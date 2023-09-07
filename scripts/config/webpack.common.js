@@ -40,13 +40,15 @@ const getCssLoaders = (importLoaders) => [
 
 module.exports = {
   entry: {
-    app: resolve(PROJECT_PATH, './src/index.js'),
+    app: resolve(PROJECT_PATH, './src/index.tsx'),
   },
   output: {
     filename: `js/[name]${isDev ? '' : '.[hash:8]'}.js`,
     path: resolve(PROJECT_PATH, './dist'),
   },
-
+  resolve: {
+    extensions: ['.tsx', '.ts', '.js', '.json'], // load sorted order
+  },
   plugins: [
     new HtmlWebpackPlugin({
       template: resolve(PROJECT_PATH, './public/index.html'),
@@ -79,7 +81,7 @@ module.exports = {
         options: { cacheDirectory: true },
         exclude: /node_modules/,
       },
-      
+
       {
         test: /\.css$/,
         use: getCssLoaders(1),
