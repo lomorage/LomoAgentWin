@@ -36,37 +36,11 @@ const getCssLoaders = (importLoaders) => [
       sourceMap: isDev,
     },
   },
-
-  {
-    test: [/\.bmp$/, /\.gif$/, /\.jpe?g$/, /\.png$/],
-    use: [
-      {
-        loader: 'url-loader',
-        options: {
-          limit: 10 * 1024,
-          name: '[name].[contenthash:8].[ext]',
-          outputPath: 'assets/images',
-        },
-      },
-    ],
-  },
-  {
-    test: /\.(ttf|woff|woff2|eot|otf)$/,
-    use: [
-      {
-        loader: 'url-loader',
-        options: {
-          name: '[name].[contenthash:8].[ext]',
-          outputPath: 'assets/fonts',
-        },
-      },
-    ],
-  },
 ]
 
 module.exports = {
   entry: {
-    app: resolve(PROJECT_PATH, './src/app.js'),
+    app: resolve(PROJECT_PATH, './src/index.js'),
   },
   output: {
     filename: `js/[name]${isDev ? '' : '.[hash:8]'}.js`,
@@ -125,6 +99,32 @@ module.exports = {
             loader: 'sass-loader',
             options: {
               sourceMap: isDev,
+            },
+          },
+        ],
+      },
+
+      {
+        test: [/\.bmp$/, /\.gif$/, /\.jpe?g$/, /\.png$/],
+        use: [
+          {
+            loader: 'url-loader',
+            options: {
+              limit: 10 * 1024,
+              name: '[name].[contenthash:8].[ext]',
+              outputPath: 'assets/images',
+            },
+          },
+        ],
+      },
+      {
+        test: /\.(ttf|woff|woff2|eot|otf)$/,
+        use: [
+          {
+            loader: 'url-loader',
+            options: {
+              name: '[name].[contenthash:8].[ext]',
+              outputPath: 'assets/fonts',
             },
           },
         ],
