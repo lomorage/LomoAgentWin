@@ -11,14 +11,12 @@
     "lint-eslint": "eslint -c .eslintrc.js --ext .ts,.tsx,.js src",
     "lint-stylelint": "stylelint --config .stylelintrc.js src/**/*.{less,css,scss}"
   },
-
   "browserslist": [
     ">0.2%",
     "not dead",
     "ie >= 9",
     "not op_mini all"
   ],
-  
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lomolomo2/WebPhotoViewer.git"
@@ -45,6 +43,7 @@
     "eslint-plugin-promise": "^6.1.1",
     "eslint-plugin-react": "^7.33.2",
     "eslint-plugin-unicorn": "^48.0.1",
+    "file-loader": "^6.2.0",
     "html-webpack-plugin": "^5.5.3",
     "less": "^4.2.0",
     "less-loader": "^11.1.3",
@@ -54,6 +53,8 @@
     "postcss-normalize": "^10.0.1",
     "postcss-preset-env": "^9.1.3",
     "prettier": "^3.0.3",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "sass-loader": "^13.3.2",
     "style-loader": "^3.3.3",
     "stylelint": "^15.10.3",
@@ -62,6 +63,7 @@
     "stylelint-declaration-block-no-ignored-properties": "^2.7.0",
     "stylelint-order": "^6.0.3",
     "typescript": "^5.2.2",
+    "url-loader": "^4.1.1",
     "webpack": "^5.88.2",
     "webpack-cli": "^5.1.4",
     "webpack-dev-server": "^4.15.1",
