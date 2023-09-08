@@ -3,6 +3,8 @@ const common = require('./webpack.common.js')
 
 const { SERVER_HOST, SERVER_PORT } = require('../constant')
 
+const { CleanWebpackPlugin } = require('clean-webpack-plugin')
+
 module.exports = merge(common, {
   mode: 'development',
   devtool: 'eval-source-map',
@@ -15,4 +17,7 @@ module.exports = merge(common, {
     open: true, // 打开默认浏览器
     hot: true, // 热更新
   },
+  // plugins: [
+  //   new CleanWebpackPlugin(),
+  // ],
 })
