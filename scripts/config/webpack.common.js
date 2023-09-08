@@ -7,6 +7,8 @@ const HtmlWebpackPlugin = require('html-webpack-plugin')
 
 const CopyPlugin = require('copy-webpack-plugin')
 
+const WebpackBar = require('webpackbar')
+
 const getCssLoaders = (importLoaders) => [
   'style-loader',
   {
@@ -160,6 +162,11 @@ module.exports = {
           },
         },
       ],
+    }),
+
+    new WebpackBar({
+      name: isDev ? 'Starting now...' : 'On packagin...',
+      color: '#fa8c16',
     }),
   ],
 }
