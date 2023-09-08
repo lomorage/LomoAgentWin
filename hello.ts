@@ -1,6 +1,8 @@
-const add = (a, b) => {
-  console.log(a + b)
-  return a + b
-}
+// const add = (a, b) => {
+//   console.log(a + b)
+//   return a + b
+// }
 
-export default add
+// export default add
+
+// !!! force type checking will report error!!!

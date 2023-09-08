@@ -9,6 +9,8 @@ const CopyPlugin = require('copy-webpack-plugin')
 
 const WebpackBar = require('webpackbar')
 
+const ForkTsCheckerWebpackPlugin = require('fork-ts-checker-webpack-plugin')
+
 const getCssLoaders = (importLoaders) => [
   'style-loader',
   {
@@ -167,6 +169,13 @@ module.exports = {
     new WebpackBar({
       name: isDev ? 'Starting now...' : 'On packagin...',
       color: '#fa8c16',
+    }),
+
+    // force type checking, will report error on start or packaging step
+    new ForkTsCheckerWebpackPlugin({
+      typescript: {
+        configFile: resolve(PROJECT_PATH, './tsconfig.json'),
+      },
     }),
   ],
 }
