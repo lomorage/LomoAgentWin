@@ -54,10 +54,33 @@ module.exports = {
   },
   resolve: {
     extensions: ['.tsx', '.ts', '.js', '.json'], // load sorted order
+
+    alias: {
+      Src: resolve(PROJECT_PATH, './src'),
+      Logic: resolve(PROJECT_PATH, './src/logic'),
+      UI: resolve(PROJECT_PATH, './src/ui'),
+    },
+
+    fallback: {
+      path: require.resolve('path-browserify'),
+      fs: false
+    },
+  },
+
+  experiments: {
+    asyncWebAssembly: true, // or syncWebAssembly: true based on your needs
   },
 
   module: {
+    noParse: /\.wasm$/,
     rules: [
+      {
+        test: /\.wasm$/,
+        loader: 'base64-loader',
+        type: 'javascript/auto',
+        // type: 'webassembly/async', // or 'webassembly/sync' based on your needs
+      },
+
       {
         test: /\.(tsx?|js)$/,
         loader: 'babel-loader',

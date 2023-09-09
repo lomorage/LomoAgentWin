@@ -14,12 +14,13 @@ module.exports = {
     'plugin:react/recommended',
     'plugin:unicorn/recommended',
     'plugin:promise/recommended',
-    'plugin:@typescript-eslint/recommended',
+    'plugin:prettier/recommended',
+    // 'plugin:@typescript-eslint/recommended',
     // other configs ...
-    'prettier',
-    'prettier/@typescript-eslint',
-    'prettier/react',
-    'prettier/unicorn',
+    // 'prettier',
+    // 'prettier/@typescript-eslint',
+    // 'prettier/react',
+    // 'prettier/unicorn',
   ],
   parser: '@typescript-eslint/parser',
   parserOptions: {
@@ -34,6 +35,7 @@ module.exports = {
       node: {
         extensions: ['.tsx', '.ts', '.js', '.json'],
       },
+      typescript: {},
     },
   },
   plugins: ['react', 'unicorn', 'promise', '@typescript-eslint'],
