@@ -3,6 +3,11 @@ import {createRoot} from 'react-dom/client'
 import App from './app'
 import LoginForm from './ui/LoginForm'
 
+import MUILoginForm from './ui/MUILoginForm'
+
+
+// import './index.css'
+
 const container = document.querySelector('#root')
 const root = createRoot(container!)
 // root.render(<App name='AISNOTE LOMO' age={25}/>)
@@ -27,7 +32,7 @@ if (isLoggedIn) {
 } else {
     root.render(
         <React.StrictMode>
-            <LoginForm />
+            <MUILoginForm />
         </React.StrictMode>
 
     )
