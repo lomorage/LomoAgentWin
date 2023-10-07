@@ -11,6 +11,8 @@ const WebpackBar = require('webpackbar')
 
 const ForkTsCheckerWebpackPlugin = require('fork-ts-checker-webpack-plugin')
 
+// const WorkerPlugin = require('worker-plugin')
+
 const getCssLoaders = (importLoaders) => [
   'style-loader',
   {
@@ -47,10 +49,16 @@ const getCssLoaders = (importLoaders) => [
 module.exports = {
   entry: {
     app: resolve(PROJECT_PATH, './src/index'),
+    // 'LomoSW': './src/LomoSW.js',
   },
   output: {
-    filename: `js/[name]${isDev ? '' : '.[hash:8]'}.js`,
+    filename: (chunkData) => {
+      return chunkData.chunk.name === 'LomoSW' ? 'LomoSW.js' : `js/[name]${isDev ? '' : '.[hash:8]'}.js`
+    },
+    // filename: `js/[name]${isDev ? '' : '.[hash:8]'}.js`,
     path: resolve(PROJECT_PATH, './dist'),
+
+    globalObject: 'this',
   },
   resolve: {
     extensions: ['.tsx', '.ts', '.js', '.json'], // load sorted order
@@ -63,7 +71,7 @@ module.exports = {
 
     fallback: {
       path: require.resolve('path-browserify'),
-      fs: false
+      fs: false,
     },
   },
 
@@ -74,6 +82,18 @@ module.exports = {
   module: {
     noParse: /\.wasm$/,
     rules: [
+      // for worker.ts like
+      {
+        test: /\.worker\.ts$/, // to target only specific TypeScript worker files
+        use: {
+          loader: 'worker-loader',
+          options: {
+            filename: '[name]:[hash:8].js',
+            inline: 'fallback',
+          },
+        },
+      },
+
       {
         test: /\.wasm$/,
         loader: 'base64-loader',
@@ -150,6 +170,8 @@ module.exports = {
   },
 
   plugins: [
+    // new WorkerPlugin(),
+
     new HtmlWebpackPlugin({
       template: resolve(PROJECT_PATH, './public/index.html'),
       filename: 'index.html',

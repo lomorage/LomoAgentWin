@@ -59,3 +59,40 @@ export async function login(username: string, password: string): Promise<any> {
     throw error;
   }
 }
+
+
+interface Day {
+  Hash: string;
+  // Other properties of Day
+}
+
+interface Month {
+  Days: Day[];
+  Hash: string;
+  Month: number;
+}
+
+interface Year {
+  Hash: string;
+  Months: Month[];
+  Year: number;
+}
+
+interface AssetList {
+  Hash: string;
+  Years: Year[];
+}
+
+export async function listAllAssets(token: string): Promise<AssetList> {
+  try {
+    const response = await axios.get(`${BASE_URL}/assets/merkletree`, {
+      params: {
+        token,
+      },
+    });
+
+    return response.data;
+  } catch (error) {
+    throw error;
+  }
+}

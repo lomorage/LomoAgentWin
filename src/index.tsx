@@ -1,39 +1,40 @@
-import React from 'react'
-import {createRoot} from 'react-dom/client'
+import React, { useMemo } from 'react'
+import { createRoot } from 'react-dom/client'
 import App from './app'
-import LoginForm from './ui/LoginForm'
 
-import MUILoginForm from './ui/MUILoginForm'
-
+import { AuthProvider } from './AuthContext'
+import LomoWorker from './LomoWorker.worker'
 
 // import './index.css'
 
+// register service worker
+// if ('serviceWorker' in navigator) {
+//   navigator.serviceWorker.register('/LomoSW.js');
+// }
+
+const lomoClientWorker = new LomoWorker()
+
+if (lomoClientWorker) {
+  lomoClientWorker.onmessage = (e: MessageEvent) => {
+    const result = e.data // received result from the worker thread
+    console.log('Received from worker:', result)
+  }
+
+  lomoClientWorker.postMessage('hello world from main thread')
+}
+
 const container = document.querySelector('#root')
 const root = createRoot(container!)
-// root.render(<App name='AISNOTE LOMO' age={25}/>)
 
-const renderApp = (isLoggedIn: Boolean) => {
-    root.render(
-        <React.StrictMode>
-            <App name='AISNOTE LOMO' age = {25}  />
-        </React.StrictMode>
-    )
+const renderApp = () => {
+  root.render(
+    <React.StrictMode>
+      <AuthProvider>
+        <App name="AISNOTE LOMO" age={25} />
+      </AuthProvider>
+    </React.StrictMode>,
+  )
 }
 
-// default is not-logged in
-renderApp(false)
-
-
-
-const isLoggedIn = false
-
-if (isLoggedIn) {
-
-} else {
-    root.render(
-        <React.StrictMode>
-            <MUILoginForm />
-        </React.StrictMode>
-
-    )
-}
+// Render the app
+renderApp()

@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { login } from '../logic/LomoService' // Import the login function from your API logic
+import { login, listAllAssets } from '../logic/LomoService' // Import the login function from your API logic
 
 
 import Button from "@mui/material/Button";
@@ -14,10 +14,15 @@ import Grid from "@mui/material/Grid";
 import Typography from "@mui/material/Typography";
 import { Container } from "@mui/material";
 
+import { useAuth } from '../AuthContext'  // Don't forget to import your context hook
+
+
 const MUILoginForm: React.FC = () => {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+
+  const { logIn } = useAuth();
 
   const handleUsernameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setUsername(e.target.value)
@@ -44,6 +49,13 @@ const MUILoginForm: React.FC = () => {
 
       // Handle successful login response here (e.g., set user state, redirect, etc.)
       console.log('Login successful!', response)
+
+      const listAllAssetsResponse = await listAllAssets(response.Token)
+
+      console.log('All assets get successful!', listAllAssetsResponse)
+
+      logIn();
+
     } catch (error) {
       // Handle login error (e.g., display an error message)
       console.error('Login failed:', error)

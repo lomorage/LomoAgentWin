@@ -1,11 +1,11 @@
 {
   "compilerOptions": {
-    // "typeRoots": ["./node_modules/@types", "./src/typings"],
+    "typeRoots": ["./src/typings", "./node_modules/@types"],
     "types": ["node", "argon2-browser"],
     // 基本配置
-    "target": "ES5",                          // 编译成哪个版本的 es
+    "target": "ES6",                          // 编译成哪个版本的 es
     "module": "ESNext",                       // 指定生成哪个模块系统代码
-    "lib": ["dom", "dom.iterable", "esnext"], // 编译过程中需要引入的库文件的列表
+    "lib": ["dom", "dom.iterable", "esnext", "WebWorker"], // 编译过程中需要引入的库文件的列表
     "allowJs": true,                          // 允许编译 js 文件
     "jsx": "react",                           // 在 .tsx 文件里支持 JSX
     "isolatedModules": true,
@@ -32,5 +32,7 @@
     "allowSyntheticDefaultImports": true,     // 允许从没有设置默认导出的模块中默认导入
     "noEmit": true														// 只想使用tsc的类型检查作为函数时（当其他工具（例如Babel实际编译）时）使用它
   },
-  "exclude": ["node_modules"]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"],
+
 }
