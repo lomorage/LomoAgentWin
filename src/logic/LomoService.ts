@@ -78,7 +78,7 @@ interface Year {
   Year: number;
 }
 
-interface AssetList {
+export interface AssetList {
   Hash: string;
   Years: Year[];
 }
