@@ -61,9 +61,18 @@ export async function login(username: string, password: string): Promise<any> {
 }
 
 
-interface Day {
+interface Asset {
+  Date: string;
+  Device: string;
+  Status: number;
   Hash: string;
-  // Other properties of Day
+  Name: string;
+}
+
+interface Day {
+  Assets: Asset[];
+  Day: number;
+  Hash: string;
 }
 
 interface Month {
@@ -78,14 +87,34 @@ interface Year {
   Year: number;
 }
 
-export interface AssetList {
+export interface YearList {
   Hash: string;
   Years: Year[];
 }
 
-export async function listAllAssets(token: string): Promise<AssetList> {
+export async function listAllAssets(token: string): Promise<YearList> {
   try {
     const response = await axios.get(`${BASE_URL}/assets/merkletree`, {
+      params: {
+        token,
+      },
+    });
+
+    return response.data;
+  } catch (error) {
+    throw error;
+  }
+}
+
+export interface AssetList {
+  Days: Day[];
+  Hash: string;
+  Month: number;
+}
+
+export async function listAllAssetsByYearMonth(token: string, year: string, month: string): Promise<AssetList> {
+  try {
+    const response = await axios.get(`${BASE_URL}/assets/merkletree/${year}/${month}`, {
       params: {
         token,
       },

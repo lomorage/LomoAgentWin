@@ -1,4 +1,4 @@
-import { AssetList } from '../logic/LomoService' // Import the login function from your API logic
+import { AssetList, YearList } from '../logic/LomoService' // Import the login function from your API logic
 
 import LomoWorker from '../LomoWorker.worker'
 
