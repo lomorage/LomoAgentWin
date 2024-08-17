@@ -1,4 +1,6 @@
 import { listAllAssets, listAllAssetsByYearMonth } from './logic/LomoService'
+import { lomoDb } from './logic/LomoDb'
+
 import localforage from 'localforage'
 
 const LomoWorker: Worker = self as any
@@ -11,17 +13,31 @@ async function fetchAllAssetsByYearMonth(token: string, year: string, month: str
   const allDays = response.Days
 
   // console.log(allDays)
-  allDays.forEach((assetListObj) => {
+  // allDays.forEach((assetListObj) => {
+  //   if (assetListObj) {
+  //     let assets = assetListObj.Assets
+  //     if (assets) {
+  //       assets.forEach((asset) => {
+  //         // console.log(`${asset.Date}-${asset.Name}`)
+  //         lomoDb.saveAssetFromJsonObj(asset)
+  //         gTotalCount++
+  //       })
+  //     }
+  //   }
+  // })
+
+  //!!forEach above can not be sync. here on worker thread better to do as sync
+  for (const assetListObj of allDays) {
     if (assetListObj) {
-      let assets = assetListObj.Assets
+      const assets = assetListObj.Assets
       if (assets) {
-        assets.forEach((asset) => {
-          // console.log(`${asset.Date}-${asset.Name}`)
+        for (const asset of assets) {
+          await lomoDb.saveAssetFromJsonObj(asset)
           gTotalCount++
-        })
+        }
       }
     }
-  })
+  }
 }
 
 function doFetchAllAssets(token: string, allAssets: any, callback: any) {
@@ -76,6 +92,23 @@ self.addEventListener('message', (event: MessageEvent) => {
         })
         .catch((error) => {
           ;(self as any).postMessage({ status: 'error', command: 'fetchAllAssets', error: error.message })
+        })
+      break
+
+    case 'getAssetsByYMD':
+      let date = event.data.date
+      // console.log(`day = ${date.getDay()}, date = ${date.getDate()}`)
+      lomoDb
+        .getBucket(date.getFullYear(), date.getMonth(), date.getDate())
+        .then((bucket) => {
+          ;(self as any).postMessage({
+            status: 'success',
+            command: 'getAssetsByYMD',
+            result: bucket,
+          })
+        })
+        .catch((error) => {
+          ;(self as any).postMessage({ status: 'error', command: 'getAssetsByYMD', error: error.message })
         })
       break
 

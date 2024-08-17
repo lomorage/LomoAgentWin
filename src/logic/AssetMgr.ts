@@ -1,9 +1,9 @@
 import { AssetList, YearList } from '../logic/LomoService' // Import the login function from your API logic
-
+import { AssetBucket } from './AssetTypes'
 import LomoWorker from '../LomoWorker.worker'
 
 /**
- * signletone class
+ * signletone class between UI and DB
  */
 class AssetMgr {
 
@@ -12,6 +12,14 @@ class AssetMgr {
       const command = 'fetchAllAssets'
       this.createCallback(command, resolve, reject)
       this.worker.postMessage({ command, token })
+    })
+  }
+
+  getAssetsByYMD(date: Date): Promise<AssetBucket | null> {
+    return new Promise((resolve, reject) => {
+      const command = 'getAssetsByYMD'
+      this.createCallback(command, resolve, reject)
+      this.worker.postMessage({ command, date })
     })
   }
 

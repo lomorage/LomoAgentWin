@@ -1,0 +1,76 @@
+// @import "../../style/variables.less";
+@import "../../app/style/variables.less";
+
+
+@hintBarHeight: 2px;
+@monthHeight: 12px;
+@yearHeight: 14px;
+
+.GridScrollBar {
+    position: absolute;
+    width: @gridScrollBarWidth;
+    user-select: none;
+    cursor: row-resize;
+}
+
+.GridScrollBar-thumb {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    background-color: @blue-grey-800;
+}
+
+.GridScrollBar-scaleItem {
+    position: absolute;
+
+    left: 0;
+    right: 0;
+    text-align: center;
+
+    &.hasType_month {
+        margin-top: -2px;  // Make Top line of text match the top of the div
+        font-size: @monthHeight;
+        line-height: @monthHeight;
+        color: @blue-grey-500;
+    }
+    &.hasType_year {
+        margin-top: -2px;  // Make Top line of text match the top of the div
+        font-size: @yearHeight;
+        line-height: @yearHeight;
+        color: @blue-grey-300;
+    }
+}
+
+.GridScrollBar-hint {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: @hintBarHeight;
+    margin-top: -(@hintBarHeight / 2);
+    background-color: @red;
+    font-size: @yearHeight;
+    white-space: nowrap;
+
+    opacity: 0;
+    transition: opacity @transition-time ease-out;
+
+    &.isVisible {
+        opacity: 1;
+    }
+}
+
+.GridScrollBar-hintLabel {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: @hintBarHeight;
+    padding: 2px 0;
+    text-align: center;
+    color: @blue-grey-300;
+    background-color: fadeout(@gridBg, 50%);
+
+    &.isBelow {
+        bottom: auto;
+        top: @hintBarHeight;
+    }
+}

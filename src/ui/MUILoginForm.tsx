@@ -16,7 +16,15 @@ import { Container } from '@mui/material'
 import { useAuth } from '../AuthContext' // Don't forget to import your context hook
 import { assetMgr } from 'Src/logic/AssetMgr'
 
-const MUILoginForm: React.FC = () => {
+const BASE_URL = 'http://192.168.1.73:8000/';
+
+// const [imageUrls, setImageUrls] = useState<string[]>([]);
+
+interface MUILoginFormProps {
+  onAssetsFetched: (urls: string[]) => void;
+}
+
+const MUILoginForm: React.FC<MUILoginFormProps> = ({ onAssetsFetched }) => {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -45,14 +53,47 @@ const MUILoginForm: React.FC = () => {
 
     try {
       const response = await login(username, password)
-      
+
       // Handle successful login response here (e.g., set user state, redirect, etc.)
       console.log('Login successful!', response)
+
+      const token = response.Token
 
       assetMgr
         .fetchAndStoreAssets(response.Token)
         .then((assets) => {
           console.log('All assets get successful!', assets)
+
+          // test to get
+          const date = new Date(2023, 7, 16);
+          console.log(`test date = ${date}`)
+
+          assetMgr.getAssetsByYMD(date).then(
+            (bucket) => {
+              console.log('getAssetsByYMD successful!', bucket)
+
+              if (bucket && bucket.assets) {
+
+
+              // Assuming bucket is an array of asset objects with image URLs
+              const urls = bucket?.assets.map(asset =>
+                `${BASE_URL}asset/preview/${asset.Name}?token=${token}`); // Modify according to the actual structure of bucket
+                onAssetsFetched(urls); // Update state with the fetched URLs
+
+                console.log('getAssetsByYMD successful! onAssetsFetched', urls)
+
+              } else {
+                console.warn('No assets found in the bucket.');
+                onAssetsFetched([]); // Set an empty array if no assets are found
+              }
+            }
+          ).catch(
+            (error) => {
+              console.log('getAssetsByYMD fail!', error)
+              onAssetsFetched([]); // Set an empty array if no assets are found
+            }
+          )
+
         })
         .catch((error) => {
           console.log('All assets get fail!', error)
