@@ -1,0 +1,24 @@
+@buttonFontSize: 14px;
+@svgIconSize: 22px;
+
+
+.SvgIcon {
+    vertical-align: middle;
+}
+
+.bp3-button {
+    .SvgIcon {
+        &:not(:last-child) {
+            margin-right: 5px;   // E.g. restore from trash button
+        }
+    }
+    .FaIcon {
+        &:not(:last-child) {
+            margin-right: 10px;   // E.g. detail back button
+        }
+    }
+    .SvgIcon {
+        font-size: @svgIconSize;
+        margin: (-(@svgIconSize - @buttonFontSize) / 2 - 1px) -2px;
+    }
+}

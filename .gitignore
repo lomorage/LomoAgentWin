@@ -30,6 +30,16 @@ dist/
 yarn.lock
 package-lock.json
 
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/resources/
+
+# Claude Code local config
+.claude/
+
+# Submodules managed separately
+submodules/
+
 # General
 .DS_Store
 .AppleDouble

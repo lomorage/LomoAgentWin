@@ -1,0 +1,39 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicktomlin/tauri/refs/heads/dev/.schema/config.schema.json",
+  "productName": "LomoPhotoViewer",
+  "version": "1.0.0",
+  "identifier": "com.lomoware.photoviewer",
+  "build": {
+    "frontendDist": "http://localhost:3001"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Lomo Photo Viewer",
+        "width": 1280,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false,
+        "devtools": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "resources/lomod/**/*": "lomod/",
+      "resources/proxy.exe": "proxy.exe",
+      "resources/web.zip": "web.zip"
+    }
+  }
+}

@@ -6,7 +6,7 @@ import moment from 'moment'
 
 
 import { PhotoSectionId, PhotoSectionById } from 'Src/common/CommonTypes'
-import { bindMany } from 'Src/common/CommonUtils'
+import { bindMany } from 'Src/common/LangUtil'
 
 import { GridLayout, GridSectionLayout } from 'src/ui/UITypes'
 

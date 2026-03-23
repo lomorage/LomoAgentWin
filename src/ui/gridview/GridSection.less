@@ -1,0 +1,42 @@
+// @import "../../style/variables.less";
+@import "../../app/style/variables.less";
+
+@sectionHeadHeight: 60px;  // Keep in sync with `GridSection.tsx`
+
+
+.GridSection-head {
+    height: @sectionHeadHeight;
+    padding: 20px 0 0 10px;
+
+    color: @blue-grey-200;
+    font-size: 25px;
+    font-weight: 200;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.GridSection-toggleSelection {
+    color: inherit !important;
+    font-size: @selectionButtonSize !important;
+    margin: 0 0 3px 20px;
+    visibility: hidden;
+
+    .GridSection-head:hover &,
+    &.isAlwaysVisible {
+        visibility: visible;
+    }
+
+    .SvgIcon {
+        margin: 0 !important;
+    }
+}
+
+.GridSection-body {
+    position: relative;
+}
+
+.GridSection-dummyBox {
+    position: absolute;
+    background-color: @blue-grey-900;
+}

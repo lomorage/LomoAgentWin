@@ -46,4 +46,9 @@ export interface PhotoSet {
 export interface LoadedPhotoSection extends PhotoSection, PhotoSet {
 }
 
+export function isLoadedPhotoSection(section: PhotoSection | null | undefined | false): section is LoadedPhotoSection {
+  return !!(section && (section as any).photoIds)
+}
+
 export type PhotoSectionById = { [K in PhotoSectionId]: PhotoSection | LoadedPhotoSection }
+
