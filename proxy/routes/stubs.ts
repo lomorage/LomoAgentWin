@@ -156,9 +156,9 @@ stubsRouter.get('/search/suggestions', (_req, res) => {
 // GET /api/server/media-types
 stubsRouter.get('/server/media-types', (_req, res) => {
   res.json({
-    image: ['image/jpeg', 'image/png', 'image/heic', 'image/heif', 'image/webp', 'image/gif', 'image/bmp', 'image/tiff', 'image/dng', 'image/x-adobe-dng'],
-    sidecar: ['application/xml', 'text/xml'],
-    video: ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/x-matroska', 'video/webm', 'video/3gpp'],
+    image: ['.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp', '.gif', '.bmp', '.tiff', '.dng', '.raw'],
+    sidecar: ['.xmp'],
+    video: ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.3gp', '.wmv', '.flv'],
   });
 });
 
@@ -185,4 +185,49 @@ stubsRouter.get('/sessions', (_req, res) => {
 // POST /api/trash/restore/assets — stub (lomo has no restore)
 stubsRouter.post('/trash/restore/assets', (_req, res) => {
   res.status(204).end();
+});
+
+// ── Settings API (proxy HTTP endpoints) ──────────────────────────────
+import * as fs from 'fs';
+const CONFIG_PATH = process.env.CONFIG_PATH || '';
+
+type LomoAppConfig = {
+  photos_dir: string;
+  setup_completed?: boolean;
+};
+
+function readConfig(): LomoAppConfig {
+  try {
+    if (CONFIG_PATH && fs.existsSync(CONFIG_PATH)) {
+      return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+    }
+  } catch {}
+  return { photos_dir: '', setup_completed: false };
+}
+
+function writeConfig(config: Partial<LomoAppConfig>): void {
+  if (!CONFIG_PATH) throw new Error('CONFIG_PATH not set');
+  const nextConfig = { ...readConfig(), ...config };
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(nextConfig, null, 2));
+}
+
+// GET /api/lomo/settings
+stubsRouter.get('/lomo/settings', (_req, res) => {
+  res.json(readConfig());
+});
+
+// PUT /api/lomo/settings
+stubsRouter.put('/lomo/settings', (req, res) => {
+  try {
+    const { photos_dir } = req.body;
+    if (!photos_dir || typeof photos_dir !== 'string') {
+      return res.status(400).json({ error: 'photos_dir is required' });
+    }
+    writeConfig({ photos_dir });
+    console.log(`[settings] Config saved: photos_dir=${photos_dir}`);
+    res.json({ ok: true, restart_required: true });
+  } catch (e: any) {
+    console.error('[settings] Failed to save config:', e);
+    res.status(500).json({ error: e.message });
+  }
 });

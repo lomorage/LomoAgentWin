@@ -80,7 +80,7 @@ if (-not $SkipProxy) {
     if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
 
     Write-Host "Bundling with esbuild..."
-    npx esbuild server.ts --bundle --platform=node --target=node20 --outfile=dist/server.cjs
+    npx esbuild server.ts --bundle --platform=node --target=node20 --outfile=dist/server.cjs --external:sharp
     if ($LASTEXITCODE -ne 0) { throw "esbuild bundle failed" }
 
     Write-Host "Packaging with pkg..."
@@ -89,7 +89,29 @@ if (-not $SkipProxy) {
 
     # Copy to Tauri resources
     Copy-Item "dist\proxy.exe" "$ScriptDir\src-tauri\resources\proxy.exe" -Force
-    Write-Host "proxy.exe copied to src-tauri/resources/" -ForegroundColor Green
+
+    # Create sharp.zip for HEIC support (Tauri flattens resources, zip preserves directory structure)
+    $sharpZip = "$ScriptDir\src-tauri\resources\sharp.zip"
+    $sharpStaging = "$ScriptDir\proxy\dist\sharp_staging"
+    if (Test-Path $sharpStaging) { Remove-Item -Recurse -Force $sharpStaging }
+    New-Item -ItemType Directory -Path "$sharpStaging\node_modules\sharp\lib" -Force | Out-Null
+    New-Item -ItemType Directory -Path "$sharpStaging\node_modules\@img\sharp-win32-x64\lib" -Force | Out-Null
+    Copy-Item "node_modules\sharp\lib\*" "$sharpStaging\node_modules\sharp\lib\" -Force
+    Copy-Item "node_modules\sharp\package.json" "$sharpStaging\node_modules\sharp\" -Force
+    Copy-Item "node_modules\@img\sharp-win32-x64\lib\*" "$sharpStaging\node_modules\@img\sharp-win32-x64\lib\" -Force
+    Copy-Item "node_modules\@img\sharp-win32-x64\package.json" "$sharpStaging\node_modules\@img\sharp-win32-x64\" -Force
+    # Sharp's JS dependencies
+    foreach ($dep in @("detect-libc", "semver", "@img\colour")) {
+        $src = "node_modules\$dep"
+        $dst = "$sharpStaging\node_modules\$dep"
+        if (Test-Path $src) {
+            Copy-Item $src $dst -Recurse -Force
+        }
+    }
+    if (Test-Path $sharpZip) { Remove-Item -Force $sharpZip }
+    Compress-Archive -Path "$sharpStaging\*" -DestinationPath $sharpZip
+    Remove-Item -Recurse -Force $sharpStaging
+    Write-Host "sharp.zip created at src-tauri/resources/sharp.zip" -ForegroundColor Green
 
     Pop-Location
 } else {

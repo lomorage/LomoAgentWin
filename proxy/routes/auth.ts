@@ -59,15 +59,8 @@ authRouter.post('/login', async (req, res) => {
 
     console.log(`[auth] Login attempt: user=${username}, server=${serverUrl}`);
 
-    // Hash password using Argon2 (matching LomoService.ts logic)
-    const encoded = await hashPasswordForLomo(password, username);
-    console.log(`[auth] Argon2 encoded: ${encoded}`);
-
-    const hashedPwd = stringToHexByte(encoded) + '00';
-    console.log(`[auth] Hex hash: ${hashedPwd.substring(0, 40)}...`);
-
-    // Build Basic Auth header
-    const base64Credentials = Buffer.from(`${username}:${hashedPwd}:immich-web`).toString('base64');
+    // Build Basic Auth header: username:password:deviceName (plaintext, as lomod expects)
+    const base64Credentials = Buffer.from(`${username}:${password}:immich-web`).toString('base64');
 
     // Call lomo-backend login
     const lomoRes = await fetch(`${serverUrl}/login`, {

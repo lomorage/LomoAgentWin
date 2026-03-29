@@ -4,5 +4,11 @@
   "windows": ["main"],
   "permissions": [
     "core:default"
-  ]
+  ],
+  "remote": {
+    "urls": [
+      "http://localhost/*",
+      "http://127.0.0.1/*"
+    ]
+  }
 }
