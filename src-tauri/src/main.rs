@@ -1,19 +1,60 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::io::{self, Read as _};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use tauri::Manager;
 
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+enum BackendMode {
+    #[default]
+    Local,
+    Remote,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
-struct AppConfig {
+struct LocalBackendConfig {
     #[serde(default)]
     photos_dir: String,
     #[serde(default)]
     setup_completed: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+struct RemoteBackendConfig {
+    #[serde(default)]
+    default_url: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+struct AppConfig {
+    #[serde(default)]
+    active_backend_mode: BackendMode,
+    #[serde(default)]
+    local: LocalBackendConfig,
+    #[serde(default)]
+    remote: RemoteBackendConfig,
+    #[serde(default)]
+    #[serde(skip_serializing)]
+    photos_dir: String,
+    #[serde(default)]
+    #[serde(skip_serializing)]
+    setup_completed: bool,
+    #[serde(default)]
+    #[serde(skip_serializing)]
+    backend_mode: Option<BackendMode>,
+    #[serde(default)]
+    #[serde(skip_serializing)]
+    remote_lomod_url: String,
 }
 
 struct AppState {
@@ -38,23 +79,344 @@ fn path_str(p: &std::path::Path) -> String {
     clean_path(p).to_string_lossy().to_string()
 }
 
+fn proxy_pid_path(data_dir: &std::path::Path) -> PathBuf {
+    data_dir.join("proxy.pid")
+}
+
+fn clear_proxy_pid(data_dir: &std::path::Path) {
+    std::fs::remove_file(proxy_pid_path(data_dir)).ok();
+}
+
+fn write_proxy_pid(data_dir: &std::path::Path, pid: u32) {
+    std::fs::write(proxy_pid_path(data_dir), pid.to_string()).ok();
+}
+
+#[cfg(target_os = "windows")]
+fn listening_pids_on_port(port: u16) -> Vec<u32> {
+    let Ok(output) = Command::new("netstat").args(["-ano", "-p", "tcp"]).output() else {
+        return Vec::new();
+    };
+
+    let port_suffix = format!(":{}", port);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut pids = Vec::new();
+    for line in stdout.lines() {
+        let columns: Vec<&str> = line.split_whitespace().collect();
+        if columns.len() < 5 || !columns[0].eq_ignore_ascii_case("TCP") {
+            continue;
+        }
+
+        let local_address = columns[1];
+        let state = columns[3];
+        if !local_address.ends_with(&port_suffix) || !state.eq_ignore_ascii_case("LISTENING") {
+            continue;
+        }
+
+        if let Ok(pid) = columns[4].parse::<u32>() {
+            if !pids.contains(&pid) {
+                pids.push(pid);
+            }
+        }
+    }
+
+    pids
+}
+
+#[cfg(target_os = "windows")]
+fn process_image_name(pid: u32) -> Option<String> {
+    let filter = format!("PID eq {}", pid);
+    let output = Command::new("tasklist")
+        .args(["/FI", &filter, "/FO", "CSV", "/NH"])
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout.lines().next()?.trim();
+    if line.is_empty() || line.starts_with("INFO:") {
+        return None;
+    }
+
+    let stripped = line.strip_prefix('"')?.strip_suffix('"')?;
+    stripped.split("\",\"").next().map(|name| name.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn kill_stale_proxy(data_dir: &std::path::Path) {
+    let pid_path = proxy_pid_path(data_dir);
+    let Ok(pid) = std::fs::read_to_string(&pid_path) else {
+        return;
+    };
+    let pid = pid.trim();
+    if pid.is_empty() {
+        clear_proxy_pid(data_dir);
+        return;
+    }
+
+    println!("[tauri] Killing stale proxy (pid {})", pid);
+    let _ = Command::new("taskkill").args(["/F", "/PID", pid]).output();
+    clear_proxy_pid(data_dir);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+}
+
+#[cfg(not(target_os = "windows"))]
+fn kill_stale_proxy(_data_dir: &std::path::Path) {}
+
+#[cfg(target_os = "windows")]
+fn ensure_proxy_port_available(data_dir: &std::path::Path, port: u16) -> Result<(), String> {
+    kill_stale_proxy(data_dir);
+
+    let listener_pids = listening_pids_on_port(port);
+    if listener_pids.is_empty() {
+        return Ok(());
+    }
+
+    clear_proxy_pid(data_dir);
+
+    for pid in listener_pids {
+        match process_image_name(pid) {
+            Some(image_name) if image_name.eq_ignore_ascii_case("proxy.exe") => {
+                println!(
+                    "[tauri] Killing stale proxy listener on port {} (pid {})",
+                    port, pid
+                );
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/PID", &pid.to_string()])
+                    .output();
+            }
+            Some(image_name) => {
+                return Err(format!(
+                    "Port {} is already in use by pid {} ({})",
+                    port, pid, image_name
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "Port {} is already in use by pid {} (unable to determine process name)",
+                    port, pid
+                ));
+            }
+        }
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let remaining = listening_pids_on_port(port);
+    if remaining.is_empty() {
+        return Ok(());
+    }
+
+    let details = remaining
+        .into_iter()
+        .map(|pid| match process_image_name(pid) {
+            Some(image_name) => format!("pid {} ({})", pid, image_name),
+            None => format!("pid {}", pid),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Err(format!(
+        "Port {} is still in use after cleanup: {}",
+        port, details
+    ))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ensure_proxy_port_available(_data_dir: &std::path::Path, _port: u16) -> Result<(), String> {
+    Ok(())
+}
+
+fn configure_background_child(cmd: &mut Command) {
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+fn normalize_remote_lomod_url(value: &str) -> String {
+    let trimmed = value.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if trimmed.contains("://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{}", trimmed)
+    }
+}
+
+fn backend_url_from_config(config: &AppConfig) -> String {
+    match config.active_backend_mode {
+        BackendMode::Local => "http://localhost:8000".to_string(),
+        BackendMode::Remote => {
+            let normalized = normalize_remote_lomod_url(&config.remote.default_url);
+            if normalized.is_empty() {
+                "http://localhost:8000".to_string()
+            } else {
+                normalized
+            }
+        }
+    }
+}
+
+fn parse_backend_mode(value: &str) -> Result<BackendMode, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "local" => Ok(BackendMode::Local),
+        "remote" => Ok(BackendMode::Remote),
+        other => Err(format!("Unsupported backend mode: {}", other)),
+    }
+}
+
 fn config_path(data_dir: &std::path::Path) -> PathBuf {
     data_dir.join("config.json")
 }
 
+fn normalize_config(mut config: AppConfig, data_dir: &std::path::Path) -> AppConfig {
+    if let Some(mode) = config.backend_mode {
+        config.active_backend_mode = mode;
+    }
+
+    if config.local.photos_dir.trim().is_empty() && !config.photos_dir.trim().is_empty() {
+        config.local.photos_dir = config.photos_dir.clone();
+    }
+    if !config.local.setup_completed && config.setup_completed {
+        config.local.setup_completed = true;
+    }
+    if config.remote.default_url.trim().is_empty() && !config.remote_lomod_url.trim().is_empty() {
+        config.remote.default_url = config.remote_lomod_url.clone();
+    }
+
+    config.remote.default_url = normalize_remote_lomod_url(&config.remote.default_url);
+
+    if config.local.photos_dir.trim().is_empty() {
+        config.local.photos_dir = path_str(&default_photos_dir(data_dir));
+    }
+
+    config.photos_dir = config.local.photos_dir.clone();
+    config.setup_completed = config.local.setup_completed;
+    config.backend_mode = Some(config.active_backend_mode);
+    config.remote_lomod_url = config.remote.default_url.clone();
+
+    config
+}
+
+fn runtime_data_dir(data_dir: &std::path::Path) -> PathBuf {
+    clean_path(&data_dir.join("data"))
+}
+
 fn assets_db_path(data_dir: &std::path::Path) -> PathBuf {
-    data_dir.join("data").join("var").join("assets.db")
+    runtime_data_dir(data_dir).join("var").join("assets.db")
+}
+
+fn unique_runtime_data_backup_path(data_dir: &std::path::Path) -> PathBuf {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+
+    for attempt in 0..100 {
+        let candidate = if attempt == 0 {
+            data_dir.join(format!("data.backup-{}", millis))
+        } else {
+            data_dir.join(format!("data.backup-{}-{}", millis, attempt))
+        };
+        if !candidate.exists() {
+            return clean_path(&candidate);
+        }
+    }
+
+    clean_path(&data_dir.join(format!("data.backup-{}-overflow", millis)))
+}
+
+fn backup_runtime_data_dir(data_dir: &std::path::Path) -> Result<Option<PathBuf>, String> {
+    let runtime_dir = runtime_data_dir(data_dir);
+    if !runtime_dir.exists() {
+        return Ok(None);
+    }
+
+    let backup_dir = unique_runtime_data_backup_path(data_dir);
+    std::fs::rename(&runtime_dir, &backup_dir).map_err(|e| {
+        format!(
+            "Failed to back up existing local backend data from {} to {}: {}",
+            runtime_dir.display(),
+            backup_dir.display(),
+            e
+        )
+    })?;
+
+    Ok(Some(backup_dir))
+}
+
+fn restore_runtime_data_dir(
+    data_dir: &std::path::Path,
+    backup_dir: Option<&std::path::Path>,
+) -> Result<(), String> {
+    let runtime_dir = runtime_data_dir(data_dir);
+    if runtime_dir.exists() {
+        std::fs::remove_dir_all(&runtime_dir).map_err(|e| {
+            format!(
+                "Failed to remove incomplete local backend data at {}: {}",
+                runtime_dir.display(),
+                e
+            )
+        })?;
+    }
+
+    if let Some(backup_dir) = backup_dir {
+        if backup_dir.exists() {
+            std::fs::rename(backup_dir, &runtime_dir).map_err(|e| {
+                format!(
+                    "Failed to restore previous local backend data from {} to {}: {}",
+                    backup_dir.display(),
+                    runtime_dir.display(),
+                    e
+                )
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+fn local_library_assets_db_paths(photos_dir: &std::path::Path) -> Vec<PathBuf> {
+    let normalized_dir = clean_path(photos_dir);
+    if !normalized_dir.exists() || !normalized_dir.is_dir() {
+        return Vec::new();
+    }
+
+    let mut matches = Vec::new();
+    let root_db = normalized_dir.join("assets.db");
+    if root_db.is_file() {
+        matches.push(clean_path(&root_db));
+    }
+
+    if let Ok(entries) = std::fs::read_dir(&normalized_dir) {
+        for entry in entries.flatten() {
+            let child_path = entry.path();
+            if !child_path.is_dir() {
+                continue;
+            }
+
+            let child_db = child_path.join("assets.db");
+            if child_db.is_file() {
+                matches.push(clean_path(&child_db));
+            }
+        }
+    }
+
+    matches.sort();
+    matches.dedup();
+    matches
 }
 
 fn load_config(data_dir: &std::path::Path) -> Option<AppConfig> {
     let path = config_path(data_dir);
     let content = std::fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&content).ok()
+    let config: AppConfig = serde_json::from_str(&content).ok()?;
+    Some(normalize_config(config, data_dir))
 }
 
 fn save_config(data_dir: &std::path::Path, config: &AppConfig) -> Result<(), String> {
     let path = config_path(data_dir);
-    let json = serde_json::to_string_pretty(config)
+    let normalized = normalize_config(config.clone(), data_dir);
+    let json = serde_json::to_string_pretty(&normalized)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
     std::fs::write(&path, json)
         .map_err(|e| format!("Failed to write {}: {}", path.display(), e))?;
@@ -66,11 +428,7 @@ fn default_photos_dir(data_dir: &std::path::Path) -> PathBuf {
 }
 
 fn get_app_config(data_dir: &std::path::Path) -> AppConfig {
-    let mut config = load_config(data_dir).unwrap_or_default();
-    if config.photos_dir.trim().is_empty() {
-        config.photos_dir = path_str(&default_photos_dir(data_dir));
-    }
-    config
+    normalize_config(load_config(data_dir).unwrap_or_default(), data_dir)
 }
 
 fn open_assets_db(data_dir: &std::path::Path) -> Result<Connection, String> {
@@ -82,7 +440,7 @@ fn open_assets_db(data_dir: &std::path::Path) -> Result<Connection, String> {
     Ok(conn)
 }
 
-fn admin_user_exists(data_dir: &std::path::Path) -> Result<bool, String> {
+fn local_user_exists(data_dir: &std::path::Path) -> Result<bool, String> {
     let db_path = assets_db_path(data_dir);
     if !db_path.exists() {
         return Ok(false);
@@ -90,20 +448,98 @@ fn admin_user_exists(data_dir: &std::path::Path) -> Result<bool, String> {
 
     let conn = open_assets_db(data_dir)?;
     let count: i64 = conn
-        .query_row(
-            "SELECT COUNT(1) FROM user WHERE user_name = 'admin'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| format!("Failed to query admin user: {}", e))?;
+        .query_row("SELECT COUNT(1) FROM user", [], |row| row.get(0))
+        .map_err(|e| format!("Failed to query local users: {}", e))?;
     Ok(count > 0)
 }
 
-fn is_initial_setup_complete(data_dir: &std::path::Path) -> bool {
-    match admin_user_exists(data_dir) {
-        Ok(exists) => exists,
-        Err(_) => get_app_config(data_dir).setup_completed,
+fn primary_user_home_dir(data_dir: &std::path::Path) -> Result<Option<String>, String> {
+    let db_path = assets_db_path(data_dir);
+    if !db_path.exists() {
+        return Ok(None);
     }
+
+    let conn = open_assets_db(data_dir)?;
+    conn.query_row(
+        "SELECT home_dir
+         FROM user
+         WHERE TRIM(COALESCE(home_dir, '')) <> ''
+         ORDER BY CASE WHEN user_name = 'admin' THEN 0 ELSE 1 END, user_name
+         LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|e| format!("Failed to query local user home_dir: {}", e))
+}
+
+fn photos_dir_from_home_dir(home_dir: &str) -> Option<PathBuf> {
+    let trimmed = home_dir.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let parent = PathBuf::from(trimmed).parent()?.to_path_buf();
+    Some(clean_path(&parent))
+}
+
+fn runtime_local_photos_dir(data_dir: &std::path::Path) -> Result<Option<PathBuf>, String> {
+    Ok(primary_user_home_dir(data_dir)?.and_then(|home_dir| photos_dir_from_home_dir(&home_dir)))
+}
+
+fn local_setup_completed(data_dir: &std::path::Path, config: &AppConfig) -> bool {
+    match local_user_exists(data_dir) {
+        Ok(exists) => exists,
+        Err(error) => {
+            eprintln!(
+                "[tauri] Failed to inspect runtime assets.db, falling back to config: {}",
+                error
+            );
+            config.local.setup_completed
+        }
+    }
+}
+
+fn resolved_local_photos_dir(data_dir: &std::path::Path, config: &AppConfig) -> PathBuf {
+    match runtime_local_photos_dir(data_dir) {
+        Ok(Some(path)) => path,
+        Ok(None) => photos_dir_from_config(config, data_dir),
+        Err(error) => {
+            eprintln!(
+                "[tauri] Failed to resolve runtime local photos dir, using config value: {}",
+                error
+            );
+            photos_dir_from_config(config, data_dir)
+        }
+    }
+}
+
+fn app_settings_json(data_dir: &std::path::Path) -> serde_json::Value {
+    let config = get_app_config(data_dir);
+    let resolved_photos_dir = path_str(&resolved_local_photos_dir(data_dir, &config));
+    let local_setup_completed = local_setup_completed(data_dir, &config);
+    let needs_local_setup =
+        config.active_backend_mode == BackendMode::Local && !local_setup_completed;
+    serde_json::json!({
+        "active_backend_mode": config.active_backend_mode,
+        "backend_mode": config.active_backend_mode,
+        "photos_dir": resolved_photos_dir,
+        "setup_completed": local_setup_completed,
+        "needs_local_setup": needs_local_setup,
+        "remote_lomod_url": config.remote.default_url.clone(),
+        "local": {
+            "photos_dir": resolved_photos_dir,
+            "setup_completed": local_setup_completed,
+        },
+        "remote": {
+            "default_url": config.remote.default_url.clone(),
+        },
+        "setup_required": needs_local_setup,
+    })
+}
+
+fn is_initial_setup_complete(data_dir: &std::path::Path) -> bool {
+    local_setup_completed(data_dir, &get_app_config(data_dir))
 }
 
 fn update_admin_home_dir(
@@ -147,8 +583,17 @@ fn update_admin_home_dir(
     Ok(true)
 }
 
+fn photos_dir_from_config(config: &AppConfig, data_dir: &std::path::Path) -> PathBuf {
+    if config.local.photos_dir.trim().is_empty() {
+        default_photos_dir(data_dir)
+    } else {
+        PathBuf::from(&config.local.photos_dir)
+    }
+}
+
 fn get_photos_dir(data_dir: &std::path::Path) -> PathBuf {
-    PathBuf::from(get_app_config(data_dir).photos_dir)
+    let config = get_app_config(data_dir);
+    resolved_local_photos_dir(data_dir, &config)
 }
 
 fn start_lomod(
@@ -165,7 +610,7 @@ fn start_lomod(
     }
 
     let mount_dir = clean_path(photos_dir);
-    let base_dir = clean_path(&data_dir.join("data"));
+    let base_dir = runtime_data_dir(data_dir);
 
     std::fs::create_dir_all(&mount_dir).ok();
     std::fs::create_dir_all(&base_dir).ok();
@@ -175,21 +620,22 @@ fn start_lomod(
     println!("[tauri]   base: {:?}", base_dir);
     println!("[tauri]   exe-dir: {:?}", lomod_dir);
 
-    match Command::new(&lomod_exe)
-        .args([
-            "--mount-dir",
-            &path_str(&mount_dir),
-            "--base",
-            &path_str(&base_dir),
-            "--exe-dir",
-            &path_str(&lomod_dir),
-            "--port",
-            "8000",
-            "--admin-token",
-            "123456",
-        ])
-        .spawn()
-    {
+    let mut cmd = Command::new(&lomod_exe);
+    cmd.args([
+        "--mount-dir",
+        &path_str(&mount_dir),
+        "--base",
+        &path_str(&base_dir),
+        "--exe-dir",
+        &path_str(&lomod_dir),
+        "--port",
+        "8000",
+        "--admin-token",
+        "123456",
+    ]);
+    configure_background_child(&mut cmd);
+
+    match cmd.spawn() {
         Ok(child) => {
             println!("[tauri] lomod started (pid {})", child.id());
             Some(child)
@@ -203,10 +649,19 @@ fn start_lomod(
 
 /// Extract web.zip from resources to data_dir/web if not already extracted
 /// or if the zip is newer than the extracted directory.
-fn extract_web_zip(resource_dir: &std::path::Path, data_dir: &std::path::Path) -> PathBuf {
+fn extract_web_zip(
+    resource_dir: &std::path::Path,
+    data_dir: &std::path::Path,
+) -> Result<PathBuf, String> {
     let zip_path = clean_path(&resource_dir.join("web.zip"));
     let web_dir = data_dir.join("web");
     let marker = web_dir.join(".extracted");
+    let staging_dir = data_dir.join("web.__extracting");
+    let backup_dir = data_dir.join("web.__previous");
+
+    if !zip_path.exists() {
+        return Err(format!("web.zip not found at {:?}", zip_path));
+    }
 
     let needs_extract = if marker.exists() && web_dir.join("index.html").exists() {
         let zip_modified = std::fs::metadata(&zip_path)
@@ -225,22 +680,65 @@ fn extract_web_zip(resource_dir: &std::path::Path, data_dir: &std::path::Path) -
 
     if needs_extract {
         println!("[tauri] Extracting web.zip to {:?}", web_dir);
-        if web_dir.exists() {
-            std::fs::remove_dir_all(&web_dir).ok();
+        if staging_dir.exists() {
+            std::fs::remove_dir_all(&staging_dir).map_err(|e| {
+                format!("Failed to remove staging web dir {:?}: {}", staging_dir, e)
+            })?;
         }
-        std::fs::create_dir_all(&web_dir).ok();
+        std::fs::create_dir_all(&staging_dir)
+            .map_err(|e| format!("Failed to create staging web dir {:?}: {}", staging_dir, e))?;
 
-        if let Err(e) = do_extract_zip(&zip_path, &web_dir) {
-            eprintln!("[tauri] Failed to extract web.zip: {}", e);
-        } else {
-            std::fs::write(&marker, "ok").ok();
-            println!("[tauri] Web files extracted successfully");
+        do_extract_zip(&zip_path, &staging_dir)
+            .map_err(|e| format!("Failed to extract web.zip: {}", e))?;
+
+        if !staging_dir.join("index.html").exists() {
+            std::fs::remove_dir_all(&staging_dir).ok();
+            return Err(format!(
+                "Extracted web.zip but index.html was missing from {:?}",
+                staging_dir
+            ));
         }
+
+        if backup_dir.exists() {
+            std::fs::remove_dir_all(&backup_dir).map_err(|e| {
+                format!(
+                    "Failed to remove previous web backup {:?}: {}",
+                    backup_dir, e
+                )
+            })?;
+        }
+
+        if web_dir.exists() {
+            std::fs::rename(&web_dir, &backup_dir)
+                .map_err(|e| format!("Failed to move existing web dir {:?}: {}", web_dir, e))?;
+        }
+
+        if let Err(error) = std::fs::rename(&staging_dir, &web_dir) {
+            if backup_dir.exists() && !web_dir.exists() {
+                let _ = std::fs::rename(&backup_dir, &web_dir);
+            }
+            return Err(format!(
+                "Failed to activate extracted web frontend from {:?} to {:?}: {}",
+                staging_dir, web_dir, error
+            ));
+        }
+
+        std::fs::write(&marker, "ok")
+            .map_err(|e| format!("Failed to write extraction marker {:?}: {}", marker, e))?;
+        std::fs::remove_dir_all(&backup_dir).ok();
+        println!("[tauri] Web files extracted successfully");
     } else {
         println!("[tauri] Web files already extracted, skipping");
     }
 
-    web_dir
+    if !web_dir.join("index.html").exists() {
+        return Err(format!(
+            "Web frontend missing after extraction at {:?}",
+            web_dir.join("index.html")
+        ));
+    }
+
+    Ok(web_dir)
 }
 
 fn do_extract_zip(zip_path: &std::path::Path, dest: &std::path::Path) -> io::Result<()> {
@@ -267,12 +765,21 @@ fn do_extract_zip(zip_path: &std::path::Path, dest: &std::path::Path) -> io::Res
     Ok(())
 }
 
-fn start_proxy(resource_dir: &std::path::Path, data_dir: &std::path::Path) -> Option<Child> {
+fn start_proxy(
+    resource_dir: &std::path::Path,
+    data_dir: &std::path::Path,
+    backend_url: &str,
+) -> Option<Child> {
     let proxy_exe = clean_path(&resource_dir.join("proxy.exe"));
     let web_dir = clean_path(&data_dir.join("web"));
 
     if !proxy_exe.exists() {
         eprintln!("[tauri] proxy.exe not found at {:?}, skipping", proxy_exe);
+        return None;
+    }
+
+    if let Err(error) = ensure_proxy_port_available(data_dir, 3001) {
+        eprintln!("[tauri] {}", error);
         return None;
     }
 
@@ -320,9 +827,10 @@ fn start_proxy(resource_dir: &std::path::Path, data_dir: &std::path::Path) -> Op
     let mut cmd = Command::new(&proxy_exe);
     cmd.env("PROXY_PORT", "3001")
         .env("WEB_DIR", &path_str(&web_dir))
-        .env("LOMO_BACKEND_URL", "http://localhost:8000")
+        .env("LOMO_BACKEND_URL", backend_url)
         .env("NODE_PATH", &path_str(&sharp_node_modules))
         .env("CONFIG_PATH", &path_str(&config_path(data_dir)));
+    configure_background_child(&mut cmd);
 
     if let Some(f) = log_file {
         cmd.stdout(f);
@@ -332,11 +840,28 @@ fn start_proxy(resource_dir: &std::path::Path, data_dir: &std::path::Path) -> Op
     }
 
     match cmd.spawn() {
-        Ok(child) => {
-            println!("[tauri] proxy started (pid {})", child.id());
-            Some(child)
+        Ok(mut child) => {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    clear_proxy_pid(data_dir);
+                    eprintln!("[tauri] proxy exited immediately with status {}", status);
+                    None
+                }
+                Ok(None) => {
+                    write_proxy_pid(data_dir, child.id());
+                    println!("[tauri] proxy started (pid {})", child.id());
+                    Some(child)
+                }
+                Err(e) => {
+                    clear_proxy_pid(data_dir);
+                    eprintln!("[tauri] Failed to inspect proxy process state: {}", e);
+                    None
+                }
+            }
         }
         Err(e) => {
+            clear_proxy_pid(data_dir);
             eprintln!("[tauri] Failed to start proxy: {}", e);
             None
         }
@@ -360,6 +885,22 @@ fn kill_processes(state: &mut AppState) {
         p.wait().ok();
     }
     state.proxy_process = None;
+    clear_proxy_pid(&state.data_dir);
+}
+
+fn restart_proxy(state: &mut AppState, backend_url: &str) {
+    let resource_dir = state.resource_dir.clone();
+    let data_dir = state.data_dir.clone();
+
+    if let Some(ref mut p) = state.proxy_process {
+        println!("[tauri] Restarting proxy (pid {})", p.id());
+        p.kill().ok();
+        p.wait().ok();
+    }
+    clear_proxy_pid(&data_dir);
+
+    state.proxy_process = start_proxy(&resource_dir, &data_dir, backend_url);
+    std::thread::sleep(std::time::Duration::from_millis(500));
 }
 
 /// Make a simple HTTP POST request using raw TCP (no external deps).
@@ -392,12 +933,45 @@ fn http_post(host: &str, port: u16, path: &str, body: &str) -> io::Result<u16> {
     Ok(0)
 }
 
+/// Replicates LomoUtils.ts argon2 credential derivation so the stored credential
+/// matches what the proxy sends at login time.
+///
+/// Flow (must stay in sync with hashPasswordForLomo in proxy/routes/auth.ts):
+///   1. argon2id(password, salt=username+"@lomorage.lomoware", t=3, m=4096, p=1, len=32)
+///   2. Build PHC string: $argon2id$v=19$m=4096,t=3,p=1$<saltB64>$<hashB64>
+///   3. hex-encode every byte of that string (no zero-padding; all PHC chars are >= 0x20)
+///   4. append "00"
+fn hash_password_for_lomo(password: &str, username: &str) -> Result<String, String> {
+    use argon2::{Algorithm, Argon2, Params, Version};
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let salt = format!("{}@lomorage.lomoware", username);
+    let params = Params::new(4096, 3, 1, Some(32))
+        .map_err(|e| format!("argon2 params: {}", e))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
+    let mut hash = [0u8; 32];
+    argon2
+        .hash_password_into(password.as_bytes(), salt.as_bytes(), &mut hash)
+        .map_err(|e| format!("argon2 hash: {}", e))?;
+
+    let salt_b64 = STANDARD.encode(salt.as_bytes());
+    let salt_b64 = salt_b64.trim_end_matches('=');
+    let hash_b64 = STANDARD.encode(&hash);
+    let hash_b64 = hash_b64.trim_end_matches('=');
+    let encoded = format!("$argon2id$v=19$m=4096,t=3,p=1${}${}", salt_b64, hash_b64);
+
+    let hex: String = encoded.bytes().map(|b| format!("{:x}", b)).collect();
+    Ok(format!("{}00", hex))
+}
+
 fn create_admin_user(password: &str, home_dir: &std::path::Path) -> Result<(), String> {
+    let credential = hash_password_for_lomo(password, "admin")?;
     std::fs::create_dir_all(&home_dir).ok();
 
     let body = serde_json::json!({
         "Name": "admin",
-        "Password": password,
+        "Password": credential,
         "HomeDir": path_str(&home_dir).replace('\\', "/"),
     })
     .to_string();
@@ -425,15 +999,28 @@ fn create_admin_user(password: &str, home_dir: &std::path::Path) -> Result<(), S
     Err("Could not create admin user after 5 attempts".into())
 }
 
+fn wait_for_local_users(data_dir: &std::path::Path, attempts: usize, delay_ms: u64) -> bool {
+    for _ in 0..attempts {
+        match local_user_exists(data_dir) {
+            Ok(true) => return true,
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!("[tauri] Waiting for runtime assets.db failed: {}", error);
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+    }
+
+    false
+}
+
 // ── Tauri IPC Commands ──────────────────────────────────────────────
 
 #[tauri::command]
 fn get_app_settings(state: tauri::State<'_, Mutex<AppState>>) -> Result<serde_json::Value, String> {
     let state = state.lock().map_err(|e| e.to_string())?;
-    let photos_dir = get_photos_dir(&state.data_dir);
-    Ok(serde_json::json!({
-        "photos_dir": path_str(&photos_dir),
-    }))
+    Ok(app_settings_json(&state.data_dir))
 }
 
 #[tauri::command]
@@ -441,11 +1028,37 @@ fn get_initial_setup_state(
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<serde_json::Value, String> {
     let state = state.lock().map_err(|e| e.to_string())?;
-    let photos_dir = get_photos_dir(&state.data_dir);
-    Ok(serde_json::json!({
-        "setup_required": !is_initial_setup_complete(&state.data_dir),
-        "photos_dir": path_str(&photos_dir),
-    }))
+    Ok(app_settings_json(&state.data_dir))
+}
+
+#[tauri::command]
+fn save_backend_preference(
+    state: tauri::State<'_, Mutex<AppState>>,
+    backend_mode: String,
+    remote_lomod_url: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+    let data_dir = state.data_dir.clone();
+    let resource_dir = state.resource_dir.clone();
+    let next_mode = parse_backend_mode(&backend_mode)?;
+
+    let mut config = get_app_config(&data_dir);
+    config.active_backend_mode = next_mode.clone();
+    if let Some(url) = remote_lomod_url {
+        config.remote.default_url = normalize_remote_lomod_url(&url);
+    }
+
+    save_config(&data_dir, &config)?;
+
+    // Start lomod if switching to local and it isn't running; never kill it.
+    if next_mode == BackendMode::Local && state.lomod_process.is_none() {
+        let photos_dir = resolved_local_photos_dir(&data_dir, &config);
+        state.lomod_process = start_lomod(&resource_dir, &data_dir, &photos_dir);
+    }
+
+    restart_proxy(&mut state, &backend_url_from_config(&config));
+
+    Ok(app_settings_json(&data_dir))
 }
 
 #[tauri::command]
@@ -457,6 +1070,23 @@ fn pick_folder() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+fn inspect_local_library_folder(photos_dir: String) -> Result<serde_json::Value, String> {
+    let trimmed = photos_dir.trim();
+    let photos_path = PathBuf::from(trimmed);
+    let matches = if trimmed.is_empty() {
+        Vec::new()
+    } else {
+        local_library_assets_db_paths(&photos_path)
+    };
+
+    Ok(serde_json::json!({
+        "photos_dir": if trimmed.is_empty() { String::new() } else { path_str(&photos_path) },
+        "has_existing_user_db": !matches.is_empty(),
+        "existing_assets_db_paths": matches.iter().map(|path| path_str(path)).collect::<Vec<_>>(),
+    }))
+}
+
+#[tauri::command]
 fn complete_initial_setup(
     state: tauri::State<'_, Mutex<AppState>>,
     photos_dir: String,
@@ -465,6 +1095,11 @@ fn complete_initial_setup(
     let mut state = state.lock().map_err(|e| e.to_string())?;
     let data_dir = state.data_dir.clone();
     let resource_dir = state.resource_dir.clone();
+
+    let config = get_app_config(&data_dir);
+    if config.active_backend_mode != BackendMode::Local {
+        return Err("Switch to the bundled local backend before running desktop setup".into());
+    }
 
     if is_initial_setup_complete(&data_dir) {
         return Err("Initial setup has already been completed".into());
@@ -481,6 +1116,14 @@ fn complete_initial_setup(
 
     let previous_photos_dir = get_photos_dir(&data_dir);
     let photos_path = PathBuf::from(next_dir);
+    let existing_library_db_paths = local_library_assets_db_paths(&photos_path);
+    if !existing_library_db_paths.is_empty() {
+        return Err(format!(
+            "Selected folder already contains local library data at {}. Choose another folder or continue with the existing library sign-in flow.",
+            path_str(&existing_library_db_paths[0])
+        ));
+    }
+
     std::fs::create_dir_all(&photos_path)
         .map_err(|e| format!("Failed to create directory: {}", e))?;
     let home_dir = clean_path(&photos_path.join("admin"));
@@ -502,68 +1145,257 @@ fn complete_initial_setup(
     }
 
     let config = AppConfig {
-        photos_dir: path_str(&photos_path),
-        setup_completed: true,
+        active_backend_mode: BackendMode::Local,
+        local: LocalBackendConfig {
+            photos_dir: path_str(&photos_path),
+            setup_completed: true,
+        },
+        remote: config.remote,
+        ..Default::default()
     };
     save_config(&data_dir, &config)?;
     println!(
         "[tauri] Initial setup completed: photos_dir={}",
-        config.photos_dir
+        config.local.photos_dir
     );
     Ok(())
 }
 
 #[tauri::command]
-fn save_app_settings(
+fn use_existing_local_library(
     state: tauri::State<'_, Mutex<AppState>>,
     photos_dir: String,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     let mut state = state.lock().map_err(|e| e.to_string())?;
     let data_dir = state.data_dir.clone();
     let resource_dir = state.resource_dir.clone();
+    let previous_config = get_app_config(&data_dir);
     let previous_photos_dir = get_photos_dir(&data_dir);
 
-    let photos_path = PathBuf::from(&photos_dir);
+    let next_dir = photos_dir.trim();
+    if next_dir.is_empty() {
+        return Err("Photos directory is required".into());
+    }
+
+    let photos_path = PathBuf::from(next_dir);
+    let existing_library_db_paths = local_library_assets_db_paths(&photos_path);
+    if existing_library_db_paths.is_empty() {
+        return Err("No existing assets.db files were found in the selected folder".into());
+    }
+
+    let mut config = previous_config.clone();
+    config.active_backend_mode = BackendMode::Local;
+    config.local.photos_dir = path_str(&photos_path);
+    config.local.setup_completed = false;
+
+    save_config(&data_dir, &config)?;
+
+    kill_lomod(&mut state);
+    state.lomod_process = start_lomod(&resource_dir, &data_dir, &photos_path);
+    if state.lomod_process.is_none() {
+        save_config(&data_dir, &previous_config).ok();
+        if previous_config.active_backend_mode == BackendMode::Local {
+            state.lomod_process = start_lomod(&resource_dir, &data_dir, &previous_photos_dir);
+        }
+        return Err("Failed to restart the Lomo backend".into());
+    }
+
+    if !wait_for_local_users(&data_dir, 24, 250) {
+        kill_lomod(&mut state);
+        save_config(&data_dir, &previous_config).ok();
+        if previous_config.active_backend_mode == BackendMode::Local {
+            state.lomod_process = start_lomod(&resource_dir, &data_dir, &previous_photos_dir);
+        }
+        return Err(
+            "Existing library data was found, but lomod did not load any local users from it."
+                .into(),
+        );
+    }
+
+    if let Ok(Some(runtime_dir)) = runtime_local_photos_dir(&data_dir) {
+        config.local.photos_dir = path_str(&runtime_dir);
+    }
+    config.local.setup_completed = true;
+    save_config(&data_dir, &config)?;
+    restart_proxy(&mut state, &backend_url_from_config(&config));
+
+    println!(
+        "[tauri] Existing local library loaded: photos_dir={}",
+        config.local.photos_dir
+    );
+
+    Ok(app_settings_json(&data_dir))
+}
+
+#[tauri::command]
+fn create_new_local_library(
+    state: tauri::State<'_, Mutex<AppState>>,
+    photos_dir: String,
+    password: String,
+) -> Result<serde_json::Value, String> {
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+    let data_dir = state.data_dir.clone();
+    let resource_dir = state.resource_dir.clone();
+    let previous_config = get_app_config(&data_dir);
+    let previous_photos_dir = get_photos_dir(&data_dir);
+
+    if previous_config.active_backend_mode != BackendMode::Local {
+        return Err("Switch to the bundled local backend before creating a local library".into());
+    }
+
+    let next_dir = photos_dir.trim();
+    let next_password = password.trim();
+    if next_dir.is_empty() {
+        return Err("Photos directory is required".into());
+    }
+    if next_password.is_empty() {
+        return Err("Password is required".into());
+    }
+
+    let photos_path = PathBuf::from(next_dir);
+    let existing_library_db_paths = local_library_assets_db_paths(&photos_path);
+    if !existing_library_db_paths.is_empty() {
+        return Err(format!(
+            "Selected folder already contains local library data at {}. Open the existing library instead, or choose an empty folder.",
+            path_str(&existing_library_db_paths[0])
+        ));
+    }
+
     std::fs::create_dir_all(&photos_path)
         .map_err(|e| format!("Failed to create directory: {}", e))?;
     let home_dir = clean_path(&photos_path.join("admin"));
     std::fs::create_dir_all(&home_dir)
         .map_err(|e| format!("Failed to create admin directory: {}", e))?;
 
-    // Kill current lomod
     kill_lomod(&mut state);
-
-    let admin_home_dir_updated = match update_admin_home_dir(&data_dir, &home_dir) {
-        Ok(updated) => updated,
+    let backup_dir = match backup_runtime_data_dir(&data_dir) {
+        Ok(backup_dir) => backup_dir,
         Err(error) => {
             state.lomod_process = start_lomod(&resource_dir, &data_dir, &previous_photos_dir);
             return Err(error);
         }
     };
 
-    if !admin_home_dir_updated {
+    state.lomod_process = start_lomod(&resource_dir, &data_dir, &photos_path);
+    if state.lomod_process.is_none() {
+        restore_runtime_data_dir(&data_dir, backup_dir.as_deref()).ok();
         state.lomod_process = start_lomod(&resource_dir, &data_dir, &previous_photos_dir);
-        return Err(
-            "Admin user not found. Complete setup before changing the storage folder.".into(),
-        );
+        return Err("Failed to restart the Lomo backend".into());
     }
 
-    // Save config after the local database update succeeds.
-    let mut config = get_app_config(&data_dir);
-    config.photos_dir = photos_dir.clone();
-    config.setup_completed = true;
-    save_config(&data_dir, &config)?;
-    println!("[tauri] Settings saved: photos_dir={}", photos_dir);
+    if let Err(error) = create_admin_user(next_password, &home_dir) {
+        kill_lomod(&mut state);
+        restore_runtime_data_dir(&data_dir, backup_dir.as_deref()).ok();
+        state.lomod_process = start_lomod(&resource_dir, &data_dir, &previous_photos_dir);
+        return Err(error);
+    }
 
-    // Start new lomod with updated mount-dir
-    state.lomod_process = start_lomod(&resource_dir, &data_dir, &photos_path);
-    println!("[tauri] Admin user HomeDir updated in local database");
+    let mut config = previous_config.clone();
+    config.active_backend_mode = BackendMode::Local;
+    config.local.photos_dir = path_str(&photos_path);
+    config.local.setup_completed = true;
+    if let Err(error) = save_config(&data_dir, &config) {
+        kill_lomod(&mut state);
+        restore_runtime_data_dir(&data_dir, backup_dir.as_deref()).ok();
+        state.lomod_process = start_lomod(&resource_dir, &data_dir, &previous_photos_dir);
+        return Err(error);
+    }
 
+    restart_proxy(&mut state, &backend_url_from_config(&config));
+    if let Some(backup_dir) = backup_dir {
+        println!(
+            "[tauri] Previous local backend data preserved at {}",
+            backup_dir.display()
+        );
+    }
     println!(
-        "[tauri] lomod restarted with new photos dir: {}",
-        photos_dir
+        "[tauri] New local library created: photos_dir={}",
+        config.local.photos_dir
     );
-    Ok(())
+
+    Ok(app_settings_json(&data_dir))
+}
+
+#[tauri::command]
+fn save_app_settings(
+    state: tauri::State<'_, Mutex<AppState>>,
+    photos_dir: String,
+    backend_mode: String,
+    remote_lomod_url: String,
+) -> Result<serde_json::Value, String> {
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+    let data_dir = state.data_dir.clone();
+    let resource_dir = state.resource_dir.clone();
+    let previous_photos_dir = get_photos_dir(&data_dir);
+    let previous_config = get_app_config(&data_dir);
+    let next_mode = parse_backend_mode(&backend_mode)?;
+    let normalized_remote = normalize_remote_lomod_url(&remote_lomod_url);
+
+    let mut config = previous_config.clone();
+    config.active_backend_mode = next_mode.clone();
+    config.remote.default_url = normalized_remote;
+
+    match next_mode {
+        BackendMode::Remote => {
+            save_config(&data_dir, &config)?;
+            kill_lomod(&mut state);
+            restart_proxy(&mut state, &backend_url_from_config(&config));
+            println!("[tauri] Settings saved: backend_mode=remote");
+        }
+        BackendMode::Local => {
+            let next_dir = photos_dir.trim();
+            if next_dir.is_empty() {
+                return Err("Photos directory is required for the bundled local backend".into());
+            }
+
+            let photos_path = PathBuf::from(next_dir);
+            std::fs::create_dir_all(&photos_path)
+                .map_err(|e| format!("Failed to create directory: {}", e))?;
+
+            kill_lomod(&mut state);
+
+            if is_initial_setup_complete(&data_dir) {
+                let home_dir = clean_path(&photos_path.join("admin"));
+                std::fs::create_dir_all(&home_dir)
+                    .map_err(|e| format!("Failed to create admin directory: {}", e))?;
+
+                let admin_home_dir_updated = match update_admin_home_dir(&data_dir, &home_dir) {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        state.lomod_process =
+                            start_lomod(&resource_dir, &data_dir, &previous_photos_dir);
+                        return Err(error);
+                    }
+                };
+
+                if !admin_home_dir_updated {
+                    state.lomod_process =
+                        start_lomod(&resource_dir, &data_dir, &previous_photos_dir);
+                    return Err(
+                        "Admin user not found. Complete setup before changing the storage folder."
+                            .into(),
+                    );
+                }
+
+                println!("[tauri] Admin user HomeDir updated in local database");
+            }
+
+            config.local.photos_dir = path_str(&photos_path);
+            if is_initial_setup_complete(&data_dir) {
+                config.local.setup_completed = true;
+            }
+            save_config(&data_dir, &config)?;
+
+            state.lomod_process = start_lomod(&resource_dir, &data_dir, &photos_path);
+            restart_proxy(&mut state, &backend_url_from_config(&config));
+            println!(
+                "[tauri] Settings saved: backend_mode=local photos_dir={}",
+                config.local.photos_dir
+            );
+        }
+    }
+
+    Ok(app_settings_json(&data_dir))
 }
 
 // ── Main ────────────────────────────────────────────────────────────
@@ -573,8 +1405,12 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_app_settings,
             get_initial_setup_state,
+            save_backend_preference,
             pick_folder,
+            inspect_local_library_folder,
             complete_initial_setup,
+            use_existing_local_library,
+            create_new_local_library,
             save_app_settings,
         ])
         .setup(|app| {
@@ -606,31 +1442,69 @@ fn main() {
             std::fs::write(&log_path, &log_content).ok();
             println!("[tauri] Debug log written to {:?}", log_path);
 
-            // Determine photos directory from config or use default (no dialog)
-            let photos_dir = get_photos_dir(&data_dir);
+            let config = get_app_config(&data_dir);
+            let photos_dir = resolved_local_photos_dir(&data_dir, &config);
             std::fs::create_dir_all(&photos_dir).ok();
             println!("[tauri] Photos dir: {:?}", photos_dir);
+            println!(
+                "[tauri] Backend mode: {}",
+                match config.active_backend_mode {
+                    BackendMode::Local => "local",
+                    BackendMode::Remote => "remote",
+                }
+            );
 
-            // Extract web.zip
-            let _web_dir = extract_web_zip(&resource_dir, &data_dir);
+            // Clear out a proxy left behind by a prior crashed run before touching the web dir.
+            ensure_proxy_port_available(&data_dir, 3001)
+                .map_err(|message| io::Error::new(io::ErrorKind::AddrInUse, message))?;
 
-            // Start lomod
-            let lomod = start_lomod(&resource_dir, &data_dir, &photos_dir);
+            // Extract web.zip and fail early if the runtime frontend is unavailable.
+            let web_dir = extract_web_zip(&resource_dir, &data_dir)
+                .map_err(|message| io::Error::new(io::ErrorKind::Other, message))?;
+            let post_extract_log = format!(
+                "{}post_extract_web_dir: {:?}\npost_extract_web_dir exists: {}\npost_extract_index.html exists: {}\n",
+                log_content,
+                web_dir,
+                web_dir.exists(),
+                web_dir.join("index.html").exists(),
+            );
+            std::fs::write(&log_path, post_extract_log).ok();
+
+            // Kill any stale lomod on port 8000 before starting a fresh one.
+            #[cfg(target_os = "windows")]
+            {
+                let _ = Command::new("taskkill").args(["/F", "/IM", "lomod.exe"]).output();
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+
+            // Start lomod only when the app is configured to use the bundled local backend.
+            let lomod = if config.active_backend_mode == BackendMode::Local {
+                start_lomod(&resource_dir, &data_dir, &photos_dir)
+            } else {
+                None
+            };
 
             // Start proxy
-            let proxy = start_proxy(&resource_dir, &data_dir);
+            let proxy = start_proxy(&resource_dir, &data_dir, &backend_url_from_config(&config))
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::AddrInUse,
+                        "Failed to start proxy on port 3001. Check proxy-err.log for details.",
+                    )
+                })?;
 
             // Give the proxy a moment to start before WebView loads
             std::thread::sleep(std::time::Duration::from_secs(2));
 
             app.manage(Mutex::new(AppState {
                 lomod_process: lomod,
-                proxy_process: proxy,
+                proxy_process: Some(proxy),
                 resource_dir: clean_path(&resource_dir),
                 data_dir: clean_path(&data_dir),
             }));
 
-            // Open DevTools for debugging
+            // Keep release builds clean; only auto-open devtools for debug builds.
+            #[cfg(debug_assertions)]
             if let Some(w) = app.get_webview_window("main") {
                 w.open_devtools();
             }

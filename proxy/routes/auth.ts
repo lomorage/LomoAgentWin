@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import fetch from 'node-fetch';
 import { argon2id } from 'hash-wasm';
-import { createSession, deleteSession } from '../session';
+import { createSession, deleteSession, hasSession } from '../session';
 
-const DEFAULT_LOMO_URL = process.env.LOMO_BACKEND_URL || 'http://192.168.1.73:8000';
+const DEFAULT_LOMO_URL = process.env.LOMO_BACKEND_URL || 'http://localhost:8000';
 
 export const authRouter = Router();
 
@@ -59,8 +59,10 @@ authRouter.post('/login', async (req, res) => {
 
     console.log(`[auth] Login attempt: user=${username}, server=${serverUrl}`);
 
-    // Build Basic Auth header: username:password:deviceName (plaintext, as lomod expects)
-    const base64Credentials = Buffer.from(`${username}:${password}:immich-web`).toString('base64');
+    // Lomod expects the Argon2-derived credential string, not the plaintext password.
+    const encodedPassword = await hashPasswordForLomo(password, username);
+    const hexPassword = `${stringToHexByte(encodedPassword)}00`;
+    const base64Credentials = Buffer.from(`${username}:${hexPassword}:immich-web`).toString('base64');
 
     // Call lomo-backend login
     const lomoRes = await fetch(`${serverUrl}/login`, {
@@ -106,9 +108,12 @@ authRouter.post('/login', async (req, res) => {
 // POST /api/auth/validateToken
 authRouter.post('/validateToken', (req, res) => {
   const sessionId = req.cookies?.lomo_session;
-  if (sessionId) {
+  if (hasSession(sessionId)) {
     res.json({ authStatus: true });
   } else {
+    res.clearCookie('immich_is_authenticated', { path: '/' });
+    res.clearCookie('immich_auth_type', { path: '/' });
+    res.clearCookie('lomo_session', { path: '/' });
     res.status(401).json({ authStatus: false });
   }
 });
@@ -119,8 +124,8 @@ authRouter.post('/logout', (req, res) => {
   if (sessionId) {
     deleteSession(sessionId);
   }
-  res.clearCookie('immich_is_authenticated');
-  res.clearCookie('immich_auth_type');
-  res.clearCookie('lomo_session');
+  res.clearCookie('immich_is_authenticated', { path: '/' });
+  res.clearCookie('immich_auth_type', { path: '/' });
+  res.clearCookie('lomo_session', { path: '/' });
   res.json({ successful: true, redirectUri: '/auth/login' });
 });
