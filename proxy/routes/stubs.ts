@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import * as os from 'os';
+import fetch from 'node-fetch';
 import { getLomoToken } from '../session';
 
 export const stubsRouter = Router();
@@ -70,12 +72,49 @@ stubsRouter.get('/server/about', (_req, res) => {
 });
 
 // GET /api/server/storage
-stubsRouter.get('/server/storage', (_req, res) => {
+stubsRouter.get('/server/storage', async (req, res) => {
+  const auth = getLomoToken(req);
+  if (auth) {
+    try {
+      const lomoRes = await fetch(`${auth.serverUrl}/mount?token=${auth.token}`);
+      if (lomoRes.ok) {
+        type MountEntry = { FreeSize?: number; TotalSize?: number; Error?: string };
+        const mounts = await lomoRes.json() as MountEntry[];
+        const main = Array.isArray(mounts) ? (mounts.find((m) => !m.Error) ?? mounts[0]) : undefined;
+        if (main?.TotalSize) {
+          const mib = 1024 * 1024;
+          const totalRaw = main.TotalSize * mib;
+          const freeRaw = (main.FreeSize ?? 0) * mib;
+          const usedRaw = totalRaw - freeRaw;
+          const fmt = (b: number) => {
+            const gib = 1024 ** 3;
+            return b >= gib ? `${(b / gib).toFixed(1)} GiB` : `${(b / (1024 * 1024)).toFixed(0)} MiB`;
+          };
+          return res.json({
+            diskAvailable: fmt(freeRaw),
+            diskAvailableRaw: freeRaw,
+            diskSize: fmt(totalRaw),
+            diskSizeRaw: totalRaw,
+            diskUse: fmt(usedRaw),
+            diskUseRaw: usedRaw,
+            diskUsagePercentage: Math.round((usedRaw / totalRaw) * 100),
+          });
+        }
+      }
+    } catch {
+      // fall through to stub
+    }
+  }
+  // Local stub fallback
+  const gib = 1024 ** 3;
   res.json({
-    diskAvailable: '100 GB',
-    diskSize: '500 GB',
-    diskUse: '400 GB',
-    diskUsagePercentage: 80,
+    diskAvailable: 'N/A',
+    diskAvailableRaw: 0,
+    diskSize: 'N/A',
+    diskSizeRaw: gib,
+    diskUse: 'N/A',
+    diskUseRaw: 0,
+    diskUsagePercentage: 0,
   });
 });
 
@@ -124,7 +163,38 @@ stubsRouter.get('/users/me/preferences', (_req, res) => {
 });
 
 // GET /api/assets/statistics
-stubsRouter.get('/assets/statistics', (_req, res) => {
+stubsRouter.get('/assets/statistics', async (req, res) => {
+  const auth = getLomoToken(req);
+  if (auth) {
+    try {
+      const lomoRes = await fetch(`${auth.serverUrl}/assets/merkletree?token=${auth.token}`);
+      if (lomoRes.ok) {
+        type LomoAsset = { Name: string };
+        type LomoDay = { Assets?: LomoAsset[] };
+        type LomoMonth = { Days?: LomoDay[] };
+        type LomoYear = { Year: number; Months?: LomoMonth[] };
+        type LomoTree = { Years?: LomoYear[] };
+        const tree = await lomoRes.json() as LomoTree;
+        let total = 0;
+        let images = 0;
+        const videoExts = new Set(['.mp4', '.mov', '.avi', '.mkv', '.webm', '.3gp', '.wmv', '.flv']);
+        for (const year of tree.Years ?? []) {
+          for (const month of year.Months ?? []) {
+            for (const day of month.Days ?? []) {
+              for (const asset of day.Assets ?? []) {
+                total++;
+                const ext = asset.Name.slice(asset.Name.lastIndexOf('.')).toLowerCase();
+                if (!videoExts.has(ext)) images++;
+              }
+            }
+          }
+        }
+        return res.json({ images, videos: total - images, total });
+      }
+    } catch {
+      // fall through
+    }
+  }
   res.json({ images: 0, videos: 0, total: 0 });
 });
 
@@ -192,23 +262,115 @@ import * as fs from 'fs';
 const CONFIG_PATH = process.env.CONFIG_PATH || '';
 
 type LomoAppConfig = {
+  active_backend_mode: 'local' | 'remote';
   photos_dir: string;
-  setup_completed?: boolean;
+  setup_completed: boolean;
+  needs_local_setup?: boolean;
+  backend_mode: 'local' | 'remote';
+  remote_lomod_url: string;
+  local: {
+    photos_dir: string;
+    setup_completed: boolean;
+  };
+  remote: {
+    default_url: string;
+  };
 };
+
+type LomoAppConfigInput = {
+  active_backend_mode?: 'local' | 'remote';
+  backend_mode?: 'local' | 'remote';
+  photos_dir?: string;
+  setup_completed?: boolean;
+  remote_lomod_url?: string;
+  local?: Partial<LomoAppConfig['local']>;
+  remote?: Partial<LomoAppConfig['remote']>;
+};
+
+function normalizeRemoteLomodUrl(value: string | undefined): string {
+  const trimmed = (value ?? '').trim().replace(/\/+$/, '');
+  if (!trimmed) {
+    return '';
+  }
+
+  return trimmed.includes('://') ? trimmed : `http://${trimmed}`;
+}
+
+function normalizeConfig(input?: LomoAppConfigInput): LomoAppConfig {
+  const activeMode = input?.active_backend_mode ?? input?.backend_mode ?? 'local';
+  const localPhotosDir = input?.local?.photos_dir ?? input?.photos_dir ?? '';
+  const localSetupCompleted = input?.local?.setup_completed ?? input?.setup_completed ?? false;
+  const remoteDefaultUrl = normalizeRemoteLomodUrl(input?.remote?.default_url ?? input?.remote_lomod_url);
+
+  return {
+    active_backend_mode: activeMode,
+    photos_dir: localPhotosDir,
+    setup_completed: localSetupCompleted,
+    needs_local_setup: !localSetupCompleted,
+    backend_mode: activeMode,
+    remote_lomod_url: remoteDefaultUrl,
+    local: {
+      photos_dir: localPhotosDir,
+      setup_completed: localSetupCompleted,
+    },
+    remote: {
+      default_url: remoteDefaultUrl,
+    },
+  };
+}
 
 function readConfig(): LomoAppConfig {
   try {
     if (CONFIG_PATH && fs.existsSync(CONFIG_PATH)) {
-      return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+      const parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8')) as LomoAppConfigInput;
+      return normalizeConfig(parsed);
     }
   } catch {}
-  return { photos_dir: '', setup_completed: false };
+  return normalizeConfig();
 }
 
-function writeConfig(config: Partial<LomoAppConfig>): void {
+function writeConfig(config: Partial<LomoAppConfigInput>): void {
   if (!CONFIG_PATH) throw new Error('CONFIG_PATH not set');
-  const nextConfig = { ...readConfig(), ...config };
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(nextConfig, null, 2));
+  const current = readConfig();
+  const nextConfig = normalizeConfig({
+    active_backend_mode: config.active_backend_mode ?? config.backend_mode ?? current.active_backend_mode,
+    photos_dir: config.local?.photos_dir ?? config.photos_dir ?? current.local.photos_dir,
+    setup_completed: config.local?.setup_completed ?? config.setup_completed ?? current.local.setup_completed,
+    remote_lomod_url: config.remote?.default_url ?? config.remote_lomod_url ?? current.remote.default_url,
+  });
+
+  if (nextConfig.active_backend_mode === 'local' && !nextConfig.local.photos_dir.trim()) {
+    throw new Error('photos_dir is required when using the bundled local backend');
+  }
+
+  fs.writeFileSync(
+    CONFIG_PATH,
+    JSON.stringify(
+      {
+        active_backend_mode: nextConfig.active_backend_mode,
+        local: nextConfig.local,
+        remote: nextConfig.remote,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+function getLanAddress(): string | null {
+  for (const entries of Object.values(os.networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family === 'IPv4' && !entry.internal) {
+        return entry.address;
+      }
+    }
+  }
+  return null;
+}
+
+function getRequestHost(req: { get(name: string): string | undefined }): string {
+  const hostHeader = req.get('host') ?? `localhost:${process.env.PROXY_PORT || 3001}`;
+  return hostHeader.split(':')[0] || 'localhost';
 }
 
 // GET /api/lomo/settings
@@ -216,15 +378,45 @@ stubsRouter.get('/lomo/settings', (_req, res) => {
   res.json(readConfig());
 });
 
+// GET /api/lomo/mobile-upload-link
+stubsRouter.get('/lomo/mobile-upload-link', (req, res) => {
+  const auth = getLomoToken(req);
+  if (!auth) {
+    return res.status(401).json({ message: 'Not authenticated' });
+  }
+
+  const port = Number(process.env.PROXY_PORT || 3001);
+  const host = getLanAddress() ?? getRequestHost(req);
+  const config = readConfig();
+
+  res.json({
+    url: `http://${host}:${port}/mobile-upload`,
+    host,
+    port,
+    backendMode: config.active_backend_mode,
+    backendUrl: auth.serverUrl,
+  });
+});
+
 // PUT /api/lomo/settings
 stubsRouter.put('/lomo/settings', (req, res) => {
   try {
-    const { photos_dir } = req.body;
-    if (!photos_dir || typeof photos_dir !== 'string') {
-      return res.status(400).json({ error: 'photos_dir is required' });
+    const { photos_dir, backend_mode, remote_lomod_url } = req.body;
+    if (photos_dir !== undefined && typeof photos_dir !== 'string') {
+      return res.status(400).json({ error: 'photos_dir must be a string' });
     }
-    writeConfig({ photos_dir });
-    console.log(`[settings] Config saved: photos_dir=${photos_dir}`);
+    if (backend_mode !== undefined && backend_mode !== 'local' && backend_mode !== 'remote') {
+      return res.status(400).json({ error: 'backend_mode must be "local" or "remote"' });
+    }
+    if (remote_lomod_url !== undefined && typeof remote_lomod_url !== 'string') {
+      return res.status(400).json({ error: 'remote_lomod_url must be a string' });
+    }
+
+    writeConfig({ photos_dir, backend_mode, remote_lomod_url });
+    const saved = readConfig();
+    console.log(
+      `[settings] Config saved: backend_mode=${saved.backend_mode} photos_dir=${saved.photos_dir} remote_lomod_url=${saved.remote_lomod_url}`,
+    );
     res.json({ ok: true, restart_required: true });
   } catch (e: any) {
     console.error('[settings] Failed to save config:', e);

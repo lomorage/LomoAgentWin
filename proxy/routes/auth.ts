@@ -4,6 +4,7 @@ import { argon2id } from 'hash-wasm';
 import { createSession, deleteSession, hasSession } from '../session';
 
 const DEFAULT_LOMO_URL = process.env.LOMO_BACKEND_URL || 'http://localhost:8000';
+const DEFAULT_DEVICE_ID = 'lomo-photo-viewer-desktop';
 
 export const authRouter = Router();
 
@@ -50,19 +51,33 @@ function stringToHexByte(str: string): string {
   return hex;
 }
 
+function getLoginDeviceId(req: any): string {
+  const rawDeviceId = req.headers['x-lomo-device'] || req.body?.deviceId || req.body?.deviceName;
+  const value = Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId;
+  const normalized = String(value || DEFAULT_DEVICE_ID)
+    .trim()
+    .replace(/:/g, '-')
+    .replace(/[^A-Za-z0-9._-]/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 80);
+
+  return normalized || DEFAULT_DEVICE_ID;
+}
+
 // POST /api/auth/login
 authRouter.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     const username = email; // Immich uses email, lomo uses username
     const serverUrl = (req.headers['x-lomo-server'] as string) || DEFAULT_LOMO_URL;
+    const deviceId = getLoginDeviceId(req);
 
-    console.log(`[auth] Login attempt: user=${username}, server=${serverUrl}`);
+    console.log(`[auth] Login attempt: user=${username}, server=${serverUrl}, device=${deviceId}`);
 
     // Lomod expects the Argon2-derived credential string, not the plaintext password.
     const encodedPassword = await hashPasswordForLomo(password, username);
     const hexPassword = `${stringToHexByte(encodedPassword)}00`;
-    const base64Credentials = Buffer.from(`${username}:${hexPassword}:immich-web`).toString('base64');
+    const base64Credentials = Buffer.from(`${username}:${hexPassword}:${deviceId}`).toString('base64');
 
     // Call lomo-backend login
     const lomoRes = await fetch(`${serverUrl}/login`, {

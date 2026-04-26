@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 
-const DEFAULT_LOMO_URL = process.env.LOMO_BACKEND_URL || 'http://192.168.1.73:8000';
+const DEFAULT_LOMO_URL = process.env.LOMO_BACKEND_URL || 'http://localhost:8000';
 
 export interface Session {
   lomoToken: string;
@@ -20,6 +20,10 @@ export function createSession(lomoToken: string, userId: string, username: strin
 
 export function getSession(sessionId: string): Session | undefined {
   return sessions.get(sessionId);
+}
+
+export function hasSession(sessionId: string | undefined): boolean {
+  return !!sessionId && sessions.has(sessionId);
 }
 
 export function deleteSession(sessionId: string): void {
