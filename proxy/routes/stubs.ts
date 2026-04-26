@@ -357,15 +357,80 @@ function writeConfig(config: Partial<LomoAppConfigInput>): void {
   );
 }
 
-function getLanAddress(): string | null {
-  for (const entries of Object.values(os.networkInterfaces())) {
+function isPrivateIpv4(address: string): boolean {
+  if (address.startsWith('10.')) {
+    return true;
+  }
+
+  if (address.startsWith('192.168.')) {
+    return true;
+  }
+
+  const octets = address.split('.').map((value) => Number(value));
+  return octets.length === 4 && octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31;
+}
+
+function scoreNetworkInterface(name: string, address: string): number {
+  const normalizedName = name.toLowerCase();
+  let score = 0;
+
+  if (isPrivateIpv4(address)) {
+    score += 50;
+  }
+
+  if (normalizedName.includes('wi-fi') || normalizedName.includes('wifi') || normalizedName.includes('wlan') || normalizedName.includes('wireless')) {
+    score += 30;
+  }
+
+  if (normalizedName.includes('ethernet') || normalizedName.includes('lan')) {
+    score += 20;
+  }
+
+  if (
+    normalizedName.includes('tailscale') ||
+    normalizedName.includes('zerotier') ||
+    normalizedName.includes('docker') ||
+    normalizedName.includes('vethernet') ||
+    normalizedName.includes('hyper-v') ||
+    normalizedName.includes('vmware') ||
+    normalizedName.includes('virtualbox') ||
+    normalizedName.includes('vbox') ||
+    normalizedName.includes('wsl') ||
+    normalizedName.includes('loopback') ||
+    normalizedName.includes('tap') ||
+    normalizedName.includes('tun') ||
+    normalizedName.includes('hamachi')
+  ) {
+    score -= 40;
+  }
+
+  if (address.startsWith('169.254.')) {
+    score -= 100;
+  }
+
+  return score;
+}
+
+function getLanAddresses(): string[] {
+  const candidates: Array<{ address: string; score: number }> = [];
+
+  for (const [name, entries] of Object.entries(os.networkInterfaces())) {
     for (const entry of entries ?? []) {
-      if (entry.family === 'IPv4' && !entry.internal) {
-        return entry.address;
+      if (entry.family !== 'IPv4' || entry.internal) {
+        continue;
       }
+
+      candidates.push({
+        address: entry.address,
+        score: scoreNetworkInterface(name, entry.address),
+      });
     }
   }
-  return null;
+
+  return candidates
+    .sort((a, b) => b.score - a.score || a.address.localeCompare(b.address))
+    .map((candidate) => candidate.address)
+    .filter((address, index, values) => values.indexOf(address) === index);
 }
 
 function getRequestHost(req: { get(name: string): string | undefined }): string {
@@ -386,15 +451,19 @@ stubsRouter.get('/lomo/mobile-upload-link', (req, res) => {
   }
 
   const port = Number(process.env.PROXY_PORT || 3001);
-  const host = getLanAddress() ?? getRequestHost(req);
+  const lanAddresses = getLanAddresses();
+  const host = lanAddresses[0] ?? getRequestHost(req);
   const config = readConfig();
+  const params = new URLSearchParams({ server: auth.serverUrl });
+  const preferredUrl = `http://${host}:${port}/mobile-upload?${params.toString()}`;
 
   res.json({
-    url: `http://${host}:${port}/mobile-upload`,
+    url: preferredUrl,
     host,
     port,
     backendMode: config.active_backend_mode,
     backendUrl: auth.serverUrl,
+    candidateUrls: lanAddresses.map((address) => `http://${address}:${port}/mobile-upload?${params.toString()}`),
   });
 });
 

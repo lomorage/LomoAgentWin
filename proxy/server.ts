@@ -20,15 +20,80 @@ const PORT = process.env.PROXY_PORT || 3001;
 const WEB_DIR = path.resolve(process.env.WEB_DIR || path.join(__dirname, '../web'));
 const HOST = '0.0.0.0';
 
-function getLanAddress(): string | null {
-  for (const entries of Object.values(os.networkInterfaces())) {
+function isPrivateIpv4(address: string): boolean {
+  if (address.startsWith('10.')) {
+    return true;
+  }
+
+  if (address.startsWith('192.168.')) {
+    return true;
+  }
+
+  const octets = address.split('.').map((value) => Number(value));
+  return octets.length === 4 && octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31;
+}
+
+function scoreNetworkInterface(name: string, address: string): number {
+  const normalizedName = name.toLowerCase();
+  let score = 0;
+
+  if (isPrivateIpv4(address)) {
+    score += 50;
+  }
+
+  if (normalizedName.includes('wi-fi') || normalizedName.includes('wifi') || normalizedName.includes('wlan') || normalizedName.includes('wireless')) {
+    score += 30;
+  }
+
+  if (normalizedName.includes('ethernet') || normalizedName.includes('lan')) {
+    score += 20;
+  }
+
+  if (
+    normalizedName.includes('tailscale') ||
+    normalizedName.includes('zerotier') ||
+    normalizedName.includes('docker') ||
+    normalizedName.includes('vethernet') ||
+    normalizedName.includes('hyper-v') ||
+    normalizedName.includes('vmware') ||
+    normalizedName.includes('virtualbox') ||
+    normalizedName.includes('vbox') ||
+    normalizedName.includes('wsl') ||
+    normalizedName.includes('loopback') ||
+    normalizedName.includes('tap') ||
+    normalizedName.includes('tun') ||
+    normalizedName.includes('hamachi')
+  ) {
+    score -= 40;
+  }
+
+  if (address.startsWith('169.254.')) {
+    score -= 100;
+  }
+
+  return score;
+}
+
+function getLanAddresses(): string[] {
+  const candidates: Array<{ address: string; score: number }> = [];
+
+  for (const [name, entries] of Object.entries(os.networkInterfaces())) {
     for (const entry of entries ?? []) {
-      if (entry.family === 'IPv4' && !entry.internal) {
-        return entry.address;
+      if (entry.family !== 'IPv4' || entry.internal) {
+        continue;
       }
+
+      candidates.push({
+        address: entry.address,
+        score: scoreNetworkInterface(name, entry.address),
+      });
     }
   }
-  return null;
+
+  return candidates
+    .sort((a, b) => b.score - a.score || a.address.localeCompare(b.address))
+    .map((candidate) => candidate.address)
+    .filter((address, index, values) => values.indexOf(address) === index);
 }
 
 app.use(cookieParser());
@@ -76,10 +141,14 @@ io.on('connection', (socket) => {
 
 httpServer.listen(Number(PORT), HOST, () => {
   const fs = require('fs');
-  const lanAddress = getLanAddress();
+  const lanAddresses = getLanAddresses();
+  const lanAddress = lanAddresses[0] ?? null;
   console.log(`Lomo-Immich proxy running on http://localhost:${PORT}`);
   if (lanAddress) {
     console.log(`Mobile/LAN access available at http://${lanAddress}:${PORT}`);
+    if (lanAddresses.length > 1) {
+      console.log(`[proxy] Additional LAN candidates: ${lanAddresses.slice(1).join(', ')}`);
+    }
   }
   console.log(`Proxying to lomo-backend at ${process.env.LOMO_BACKEND_URL || 'http://localhost:8000'}`);
   console.log(`Serving web frontend from ${WEB_DIR}`);
