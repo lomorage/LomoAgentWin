@@ -43,15 +43,25 @@ if [ "$SKIP_WEB" = false ]; then
   echo "--- Step 1: Building Immich web frontend ---"
   cd submodules/immich/web
   pnpm install --force
+  rm -rf build
   pnpm run build
 
   echo "Creating web.zip in src-tauri/resources/"
   rm -f "$SCRIPT_DIR/src-tauri/resources/web.zip"
   cd build && zip -r "$SCRIPT_DIR/src-tauri/resources/web.zip" . && cd ..
+  for target_dir in "$SCRIPT_DIR/src-tauri/target/release" "$SCRIPT_DIR/src-tauri/target/debug"; do
+    if [ -d "$target_dir" ]; then
+      cp "$SCRIPT_DIR/src-tauri/resources/web.zip" "$target_dir/web.zip"
+    fi
+  done
   cd "$SCRIPT_DIR"
 else
   echo ""
   echo "--- Step 1: Skipping web frontend build ---"
+  if [ ! -f "$SCRIPT_DIR/src-tauri/resources/web.zip" ] && [ -f "$SCRIPT_DIR/src-tauri/target/release/web.zip" ]; then
+    cp "$SCRIPT_DIR/src-tauri/target/release/web.zip" "$SCRIPT_DIR/src-tauri/resources/web.zip"
+    echo "Restored missing src-tauri/resources/web.zip from target/release"
+  fi
 fi
 
 # ---- Step 2: Build proxy executable ----
@@ -74,6 +84,14 @@ else
   echo ""
   echo "--- Step 2: Skipping proxy build ---"
 fi
+
+for target_dir in "$SCRIPT_DIR/src-tauri/target/release" "$SCRIPT_DIR/src-tauri/target/debug"; do
+  if [ -d "$target_dir" ]; then
+    [ -f "$SCRIPT_DIR/src-tauri/resources/proxy.exe" ] && cp "$SCRIPT_DIR/src-tauri/resources/proxy.exe" "$target_dir/proxy.exe"
+    [ -f "$SCRIPT_DIR/src-tauri/resources/sharp.zip" ] && cp "$SCRIPT_DIR/src-tauri/resources/sharp.zip" "$target_dir/sharp.zip"
+  fi
+done
+echo "Proxy resources synced to existing target directories"
 
 # ---- Step 3: Verify lomo-backend files ----
 echo ""

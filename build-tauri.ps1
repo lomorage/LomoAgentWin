@@ -56,6 +56,7 @@ if (-not $SkipWeb) {
     if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
 
     Write-Host "Building static SPA..."
+    if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
     pnpm run build
     if ($LASTEXITCODE -ne 0) { throw "pnpm build failed" }
 
@@ -65,9 +66,22 @@ if (-not $SkipWeb) {
     Compress-Archive -Path "build\*" -DestinationPath $webZip
     Write-Host "Web build zipped to src-tauri/resources/web.zip" -ForegroundColor Green
 
+    foreach ($targetDir in @("$ScriptDir\src-tauri\target\release", "$ScriptDir\src-tauri\target\debug")) {
+        if (Test-Path $targetDir) {
+            Copy-Item $webZip (Join-Path $targetDir "web.zip") -Force
+        }
+    }
+    Write-Host "Web build synced to existing target directories" -ForegroundColor Green
+
     Pop-Location
 } else {
     Write-Host "`n--- Step 1: Skipping web frontend build ---" -ForegroundColor DarkGray
+    $webZip = "$ScriptDir\src-tauri\resources\web.zip"
+    $releaseWebZip = "$ScriptDir\src-tauri\target\release\web.zip"
+    if (-not (Test-Path $webZip) -and (Test-Path $releaseWebZip)) {
+        Copy-Item $releaseWebZip $webZip -Force
+        Write-Host "Restored missing src-tauri/resources/web.zip from target/release" -ForegroundColor Green
+    }
 }
 
 # ---- Step 2: Build proxy executable ----
@@ -112,11 +126,24 @@ if (-not $SkipProxy) {
     Compress-Archive -Path "$sharpStaging\*" -DestinationPath $sharpZip
     Remove-Item -Recurse -Force $sharpStaging
     Write-Host "sharp.zip created at src-tauri/resources/sharp.zip" -ForegroundColor Green
-
     Pop-Location
 } else {
     Write-Host "`n--- Step 2: Skipping proxy build ---" -ForegroundColor DarkGray
 }
+
+$proxyExe = "$ScriptDir\src-tauri\resources\proxy.exe"
+$sharpZip = "$ScriptDir\src-tauri\resources\sharp.zip"
+foreach ($targetDir in @("$ScriptDir\src-tauri\target\release", "$ScriptDir\src-tauri\target\debug")) {
+    if (Test-Path $targetDir) {
+        if (Test-Path $proxyExe) {
+            Copy-Item $proxyExe (Join-Path $targetDir "proxy.exe") -Force
+        }
+        if (Test-Path $sharpZip) {
+            Copy-Item $sharpZip (Join-Path $targetDir "sharp.zip") -Force
+        }
+    }
+}
+Write-Host "Proxy resources synced to existing target directories" -ForegroundColor Green
 
 # ---- Step 3: Verify lomo-backend files ----
 Write-Host "`n--- Step 3: Verifying lomo-backend files ---" -ForegroundColor Yellow
