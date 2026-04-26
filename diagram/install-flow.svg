@@ -1,0 +1,250 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 1200">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap');
+      text { font-family: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', monospace; }
+    </style>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+    </pattern>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-cyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrow-emerald" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#60a5fa"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="980" height="1200" fill="#0f172a"/>
+  <rect width="980" height="1200" fill="url(#grid)"/>
+
+  <!-- Title -->
+  <text x="30" y="22" fill="#94a3b8" font-size="14" font-weight="700">Lomo Photo Viewer — Installation Flow</text>
+
+  <!-- ═══ ARROWS LAYER ═══ -->
+
+  <!-- START → Decision1 -->
+  <line x1="490" y1="88" x2="490" y2="112" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+  <!-- Decision1 left → PowerShell column -->
+  <polyline points="435,150 200,150 200,218" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+  <text x="310" y="143" fill="#22d3ee" font-size="8" font-weight="600" text-anchor="middle">PowerShell</text>
+
+  <!-- Decision1 right → Manual column -->
+  <polyline points="545,150 760,150 760,218" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+  <text x="660" y="143" fill="#34d399" font-size="8" font-weight="600" text-anchor="middle">Manual</text>
+
+  <!-- Box A → Box B -->
+  <line x1="200" y1="285" x2="200" y2="330" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+
+  <!-- Box B → merge bar -->
+  <polyline points="200,388 200,540" fill="none" stroke="#22d3ee" stroke-width="1.5"/>
+
+  <!-- Box C → Decision2 -->
+  <line x1="760" y1="280" x2="760" y2="325" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+
+  <!-- Decision2 left → Box D (.exe) -->
+  <polyline points="710,357 600,357 600,418" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+  <text x="652" y="350" fill="#34d399" font-size="8" text-anchor="middle">.exe</text>
+
+  <!-- Decision2 right → Box E (.msi) -->
+  <polyline points="810,357 875,357 875,418" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+  <text x="842" y="350" fill="#34d399" font-size="8" text-anchor="middle">.msi</text>
+
+  <!-- Box D → merge bar -->
+  <polyline points="600,480 600,540" fill="none" stroke="#34d399" stroke-width="1.5"/>
+
+  <!-- Box E → merge bar -->
+  <polyline points="875,480 875,540" fill="none" stroke="#34d399" stroke-width="1.5"/>
+
+  <!-- Merge bar (horizontal) -->
+  <line x1="195" y1="540" x2="880" y2="540" stroke="#475569" stroke-width="1.5"/>
+
+  <!-- Merge bar → Merge box -->
+  <line x1="490" y1="540" x2="490" y2="560" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+  <!-- Merge box → First Launch -->
+  <line x1="490" y1="614" x2="490" y2="652" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+  <!-- First Launch → Decision3 -->
+  <line x1="490" y1="704" x2="490" y2="738" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+  <!-- Decision3 left → Box F (This Machine) -->
+  <polyline points="428,775 240,775 240,838" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+  <text x="326" y="768" fill="#22d3ee" font-size="8" font-weight="600" text-anchor="middle">This Machine</text>
+
+  <!-- Decision3 right → Box H (Remote) -->
+  <polyline points="552,775 720,775 720,838" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-emerald)"/>
+  <text x="638" y="768" fill="#34d399" font-size="8" font-weight="600" text-anchor="middle">Remote Server</text>
+
+  <!-- Box F → merge bar 2 -->
+  <polyline points="240,913 240,945" fill="none" stroke="#22d3ee" stroke-width="1.5"/>
+
+  <!-- Box H → merge bar 2 -->
+  <polyline points="720,913 720,945" fill="none" stroke="#34d399" stroke-width="1.5"/>
+
+  <!-- Merge bar 2 (horizontal) -->
+  <line x1="235" y1="945" x2="725" y2="945" stroke="#475569" stroke-width="1.5"/>
+
+  <!-- Merge bar 2 → Admin box -->
+  <line x1="490" y1="945" x2="490" y2="963" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+  <!-- Admin box → END -->
+  <line x1="490" y1="1020" x2="490" y2="1043" stroke="#60a5fa" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+  <!-- ═══ MASK RECTS ═══ -->
+  <rect x="390" y="38" width="200" height="50" rx="25" fill="#0f172a"/>
+  <rect x="432" y="112" width="116" height="76" fill="#0f172a"/>
+  <rect x="98" y="218" width="204" height="67" rx="6" fill="#0f172a"/>
+  <rect x="98" y="330" width="204" height="58" rx="6" fill="#0f172a"/>
+  <rect x="658" y="218" width="204" height="62" rx="6" fill="#0f172a"/>
+  <rect x="707" y="325" width="106" height="64" fill="#0f172a"/>
+  <rect x="498" y="418" width="204" height="62" rx="6" fill="#0f172a"/>
+  <rect x="793" y="418" width="164" height="62" rx="6" fill="#0f172a"/>
+  <rect x="388" y="560" width="204" height="54" rx="6" fill="#0f172a"/>
+  <rect x="388" y="652" width="204" height="52" rx="6" fill="#0f172a"/>
+  <rect x="424" y="733" width="132" height="84" fill="#0f172a"/>
+  <rect x="128" y="838" width="224" height="75" rx="6" fill="#0f172a"/>
+  <rect x="608" y="838" width="224" height="75" rx="6" fill="#0f172a"/>
+  <rect x="355" y="963" width="270" height="57" rx="6" fill="#0f172a"/>
+  <rect x="332" y="1043" width="316" height="52" rx="26" fill="#0f172a"/>
+
+  <!-- ═══ COMPONENT BOXES ═══ -->
+
+  <!-- START (blue) -->
+  <rect x="390" y="38" width="200" height="50" rx="25" fill="rgba(59,130,246,0.3)" stroke="#60a5fa" stroke-width="2"/>
+
+  <!-- Decision1 "Install Method?" (amber) -->
+  <polygon points="490,112 545,150 490,188 435,150" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+
+  <!-- Box A - PowerShell command (cyan) -->
+  <rect x="98" y="218" width="204" height="67" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+
+  <!-- Box B - Silent install (cyan) -->
+  <rect x="98" y="330" width="204" height="58" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+
+  <!-- Box C - GitHub releases (emerald) -->
+  <rect x="658" y="218" width="204" height="62" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+
+  <!-- Decision2 "EXE or MSI?" (amber) -->
+  <polygon points="760,325 810,357 760,389 710,357" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+
+  <!-- Box D - .exe installer (emerald) -->
+  <rect x="498" y="418" width="204" height="62" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+
+  <!-- Box E - .msi package (emerald) -->
+  <rect x="793" y="418" width="164" height="62" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+
+  <!-- Merge box "App Installed" (blue highlight) -->
+  <rect x="388" y="560" width="204" height="54" rx="6" fill="rgba(59,130,246,0.35)" stroke="#60a5fa" stroke-width="2"/>
+
+  <!-- First Launch (blue) -->
+  <rect x="388" y="652" width="204" height="52" rx="6" fill="rgba(59,130,246,0.3)" stroke="#60a5fa" stroke-width="1.5"/>
+
+  <!-- Decision3 "Storage Mode?" (amber) -->
+  <polygon points="490,733 552,775 490,817 428,775" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+
+  <!-- Box F - This Machine (cyan) -->
+  <rect x="128" y="838" width="224" height="75" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+
+  <!-- Box H - Remote Server (emerald) -->
+  <rect x="608" y="838" width="224" height="75" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+
+  <!-- Admin password box (violet) -->
+  <rect x="355" y="963" width="270" height="57" rx="6" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+
+  <!-- END (blue) -->
+  <rect x="332" y="1043" width="316" height="52" rx="26" fill="rgba(59,130,246,0.35)" stroke="#60a5fa" stroke-width="2.5"/>
+
+  <!-- ═══ TEXT LABELS ═══ -->
+
+  <!-- START -->
+  <text x="490" y="59" fill="white" font-size="11" font-weight="700" text-anchor="middle">Install Lomo Photo Viewer</text>
+  <text x="490" y="77" fill="#94a3b8" font-size="9" text-anchor="middle">Windows 10 / 11 · x64</text>
+
+  <!-- Decision1 -->
+  <text x="490" y="154" fill="white" font-size="10" font-weight="600" text-anchor="middle">Install Method?</text>
+
+  <!-- Box A -->
+  <text x="200" y="240" fill="white" font-size="11" font-weight="600" text-anchor="middle">PowerShell (Recommended)</text>
+  <text x="200" y="257" fill="#94a3b8" font-size="8" text-anchor="middle">irm .../install.ps1 | iex</text>
+  <text x="200" y="272" fill="#64748b" font-size="8" text-anchor="middle">Run as Admin if script blocked</text>
+
+  <!-- Box B -->
+  <text x="200" y="354" fill="white" font-size="11" font-weight="600" text-anchor="middle">Auto-installs Silently</text>
+  <text x="200" y="371" fill="#94a3b8" font-size="9" text-anchor="middle">Downloads &amp; installs (no prompts)</text>
+
+  <!-- Box C -->
+  <text x="760" y="242" fill="white" font-size="11" font-weight="600" text-anchor="middle">GitHub Releases Page</text>
+  <text x="760" y="259" fill="#94a3b8" font-size="8" text-anchor="middle">lomorage/LomoAgentWin</text>
+  <text x="760" y="272" fill="#94a3b8" font-size="8" text-anchor="middle">→ latest release</text>
+
+  <!-- Decision2 -->
+  <text x="760" y="361" fill="white" font-size="9" font-weight="600" text-anchor="middle">EXE or MSI?</text>
+
+  <!-- Box D -->
+  <text x="600" y="441" fill="white" font-size="11" font-weight="600" text-anchor="middle">NSIS Installer (.exe)</text>
+  <text x="600" y="458" fill="#94a3b8" font-size="9" text-anchor="middle">Download setup.exe</text>
+  <text x="600" y="471" fill="#94a3b8" font-size="8" text-anchor="middle">Double-click &amp; follow prompts</text>
+
+  <!-- Box E -->
+  <text x="875" y="441" fill="white" font-size="11" font-weight="600" text-anchor="middle">MSI Package (.msi)</text>
+  <text x="875" y="458" fill="#94a3b8" font-size="9" text-anchor="middle">Download .msi</text>
+  <text x="875" y="471" fill="#94a3b8" font-size="8" text-anchor="middle">msiexec /i .msi /qn</text>
+
+  <!-- Merge box -->
+  <text x="490" y="583" fill="white" font-size="12" font-weight="700" text-anchor="middle">App Installed</text>
+  <text x="490" y="601" fill="#94a3b8" font-size="9" text-anchor="middle">Lomo Photo Viewer on your system</text>
+
+  <!-- First Launch -->
+  <text x="490" y="674" fill="white" font-size="11" font-weight="600" text-anchor="middle">First Launch</text>
+  <text x="490" y="691" fill="#94a3b8" font-size="9" text-anchor="middle">Choose storage mode</text>
+
+  <!-- Decision3 -->
+  <text x="490" y="779" fill="white" font-size="10" font-weight="600" text-anchor="middle">Storage Mode?</text>
+
+  <!-- Box F -->
+  <text x="240" y="862" fill="white" font-size="11" font-weight="600" text-anchor="middle">This Machine</text>
+  <text x="240" y="879" fill="#94a3b8" font-size="9" text-anchor="middle">lomod on localhost:8000</text>
+  <text x="240" y="896" fill="#94a3b8" font-size="8" text-anchor="middle">Select photos folder</text>
+
+  <!-- Box H -->
+  <text x="720" y="862" fill="white" font-size="11" font-weight="600" text-anchor="middle">Remote Server</text>
+  <text x="720" y="879" fill="#94a3b8" font-size="9" text-anchor="middle">Enter server URL at login</text>
+  <text x="720" y="896" fill="#94a3b8" font-size="8" text-anchor="middle">Connect to existing backend</text>
+
+  <!-- Admin box -->
+  <text x="490" y="986" fill="white" font-size="11" font-weight="600" text-anchor="middle">Create Admin Password</text>
+  <text x="490" y="1005" fill="#94a3b8" font-size="9" text-anchor="middle">Complete on-screen setup</text>
+
+  <!-- END -->
+  <text x="490" y="1064" fill="white" font-size="13" font-weight="700" text-anchor="middle">Lomo Photo Viewer Ready</text>
+  <text x="490" y="1082" fill="#94a3b8" font-size="9" text-anchor="middle">Browse &amp; manage your photo library</text>
+
+  <!-- ═══ LEGEND ═══ -->
+  <rect x="30" y="1113" width="530" height="68" rx="8" fill="rgba(30,41,59,0.6)" stroke="#334155" stroke-width="1"/>
+  <text x="46" y="1130" fill="#64748b" font-size="8" font-weight="700" letter-spacing="1">LEGEND</text>
+
+  <rect x="46" y="1138" width="11" height="11" rx="2" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="63" y="1148" fill="#94a3b8" font-size="9">PowerShell path</text>
+
+  <rect x="180" y="1138" width="11" height="11" rx="2" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="197" y="1148" fill="#94a3b8" font-size="9">Manual download path</text>
+
+  <polygon points="346,1138 358,1144 346,1150 334,1144" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="365" y="1148" fill="#94a3b8" font-size="9">Decision point</text>
+
+  <rect x="46" y="1158" width="11" height="11" rx="2" fill="rgba(76,29,149,0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="63" y="1168" fill="#94a3b8" font-size="9">First-run setup</text>
+
+  <rect x="180" y="1158" width="11" height="11" rx="5.5" fill="rgba(59,130,246,0.3)" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="197" y="1168" fill="#94a3b8" font-size="9">Start / milestone / end</text>
+
+</svg>
