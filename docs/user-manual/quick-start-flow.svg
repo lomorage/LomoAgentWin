@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 1500">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap');
+      text { font-family: 'JetBrains Mono', 'Noto Sans SC', 'PingFang SC', sans-serif; }
+      .title { fill: #ffffff; font-size: 24px; font-weight: 700; }
+      .subtitle { fill: #94a3b8; font-size: 11px; }
+      .box-title { fill: #ffffff; font-size: 12px; font-weight: 600; }
+      .box-text { fill: #cbd5e1; font-size: 9px; }
+      .tiny { fill: #94a3b8; font-size: 8px; }
+      .label-yes { fill: #34d399; font-size: 8px; font-weight: 600; }
+      .label-no { fill: #fb7185; font-size: 8px; font-weight: 600; }
+    </style>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+    </pattern>
+    <marker id="arrow-slate" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-cyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrow-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+    </marker>
+  </defs>
+
+  <rect width="100%" height="100%" fill="#0f172a"/>
+  <rect width="100%" height="100%" fill="url(#grid)"/>
+
+  <text x="40" y="48" class="title">Lomo Photo Viewer 快速上手流程</text>
+  <text x="40" y="72" class="subtitle">从首次启动到日常使用的推荐路径</text>
+
+  <rect x="380" y="100" width="220" height="56" rx="25" fill="#0f172a"/>
+  <rect x="380" y="100" width="220" height="56" rx="25" fill="rgba(59,130,246,0.3)" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="490" y="123" text-anchor="middle" class="box-title">开始</text>
+  <text x="490" y="141" text-anchor="middle" class="box-text">安装并启动桌面程序</text>
+
+  <line x1="490" y1="156" x2="490" y2="220" stroke="#22d3ee" stroke-width="2.5" marker-end="url(#arrow-cyan)"/>
+
+  <rect x="350" y="224" width="280" height="62" rx="6" fill="#0f172a"/>
+  <rect x="350" y="224" width="280" height="62" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="490" y="248" text-anchor="middle" class="box-title">选择存储方式</text>
+  <text x="490" y="267" text-anchor="middle" class="box-text">This machine 或 Remote server</text>
+
+  <line x1="490" y1="286" x2="490" y2="338" stroke="#64748b" stroke-width="2.5" marker-end="url(#arrow-slate)"/>
+
+  <g transform="translate(490, 390)">
+    <polygon points="0,-42 72,0 0,42 -72,0" fill="#0f172a"/>
+    <polygon points="0,-42 72,0 0,42 -72,0" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+    <text y="-6" text-anchor="middle" class="box-title">本机模式？</text>
+    <text y="12" text-anchor="middle" class="box-text">是否在当前电脑建库</text>
+  </g>
+
+  <line x1="490" y1="432" x2="490" y2="500" stroke="#22d3ee" stroke-width="2.5" marker-end="url(#arrow-cyan)"/>
+  <text x="502" y="466" class="label-yes">是</text>
+
+  <line x1="562" y1="390" x2="790" y2="390" stroke="#64748b" stroke-width="2.5" marker-end="url(#arrow-slate)"/>
+  <text x="642" y="382" class="label-no">否</text>
+
+  <rect x="356" y="504" width="268" height="68" rx="6" fill="#0f172a"/>
+  <rect x="356" y="504" width="268" height="68" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="490" y="528" text-anchor="middle" class="box-title">选择照片文件夹</text>
+  <text x="490" y="547" text-anchor="middle" class="box-text">建议使用空目录作为新的本地库根目录</text>
+
+  <line x1="490" y1="572" x2="490" y2="624" stroke="#22d3ee" stroke-width="2.5" marker-end="url(#arrow-cyan)"/>
+
+  <g transform="translate(490, 676)">
+    <polygon points="0,-42 72,0 0,42 -72,0" fill="#0f172a"/>
+    <polygon points="0,-42 72,0 0,42 -72,0" fill="rgba(120,53,15,0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+    <text y="-6" text-anchor="middle" class="box-title">已有库数据？</text>
+    <text y="12" text-anchor="middle" class="box-text">目录内是否已存在 assets.db</text>
+  </g>
+
+  <line x1="490" y1="718" x2="490" y2="780" stroke="#22d3ee" stroke-width="2.5" marker-end="url(#arrow-cyan)"/>
+  <text x="502" y="752" class="label-yes">否</text>
+
+  <line x1="562" y1="676" x2="790" y2="676" stroke="#64748b" stroke-width="2.5" marker-end="url(#arrow-slate)"/>
+  <text x="642" y="668" class="label-no">是</text>
+
+  <rect x="356" y="784" width="268" height="68" rx="6" fill="#0f172a"/>
+  <rect x="356" y="784" width="268" height="68" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="490" y="808" text-anchor="middle" class="box-title">创建管理员密码</text>
+  <text x="490" y="827" text-anchor="middle" class="box-text">程序会在所选目录下创建 admin 目录</text>
+
+  <line x1="490" y1="852" x2="490" y2="904" stroke="#22d3ee" stroke-width="2.5" marker-end="url(#arrow-cyan)"/>
+
+  <rect x="356" y="908" width="268" height="68" rx="6" fill="#0f172a"/>
+  <rect x="356" y="908" width="268" height="68" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="490" y="932" text-anchor="middle" class="box-title">创建本地照片库并登录</text>
+  <text x="490" y="951" text-anchor="middle" class="box-text">登录目标固定为 http://localhost:8000</text>
+
+  <line x1="490" y1="976" x2="490" y2="1032" stroke="#22d3ee" stroke-width="2.5" marker-end="url(#arrow-cyan)"/>
+
+  <rect x="356" y="1036" width="268" height="68" rx="6" fill="#0f172a"/>
+  <rect x="356" y="1036" width="268" height="68" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="490" y="1060" text-anchor="middle" class="box-title">浏览时间轴 / 收藏 / 相册</text>
+  <text x="490" y="1079" text-anchor="middle" class="box-text">日常查看图片、视频并整理内容</text>
+
+  <line x1="790" y1="390" x2="790" y2="454" stroke="#64748b" stroke-width="2.5" marker-end="url(#arrow-slate)"/>
+
+  <rect x="650" y="458" width="280" height="68" rx="6" fill="#0f172a"/>
+  <rect x="650" y="458" width="280" height="68" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="790" y="482" text-anchor="middle" class="box-title">填写远程服务器地址</text>
+  <text x="790" y="501" text-anchor="middle" class="box-text">例如 http://192.168.1.73:8000</text>
+
+  <line x1="790" y1="526" x2="790" y2="588" stroke="#64748b" stroke-width="2.5" marker-end="url(#arrow-slate)"/>
+
+  <rect x="650" y="592" width="280" height="68" rx="6" fill="#0f172a"/>
+  <rect x="650" y="592" width="280" height="68" rx="6" fill="rgba(6,78,59,0.4)" stroke="#34d399" stroke-width="1.5"/>
+  <text x="790" y="616" text-anchor="middle" class="box-title">使用现有账号登录</text>
+  <text x="790" y="635" text-anchor="middle" class="box-text">远程模式不会在本机创建新的管理员库</text>
+
+  <line x1="790" y1="660" x2="790" y2="724" stroke="#64748b" stroke-width="2.5" marker-end="url(#arrow-slate)"/>
+
+  <rect x="650" y="728" width="280" height="68" rx="6" fill="#0f172a"/>
+  <rect x="650" y="728" width="280" height="68" rx="6" fill="rgba(8,51,68,0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+  <text x="790" y="752" text-anchor="middle" class="box-title">浏览时间轴 / 收藏 / 相册</text>
+  <text x="790" y="771" text-anchor="middle" class="box-text">数据来自网络中的现有 Lomo 服务</text>
+
+  <rect x="650" y="878" width="280" height="88" rx="6" fill="#0f172a"/>
+  <rect x="650" y="878" width="280" height="88" rx="6" fill="rgba(136,19,55,0.4)" stroke="#fb7185" stroke-width="1.5"/>
+  <text x="790" y="902" text-anchor="middle" class="box-title">注意事项</text>
+  <text x="790" y="922" text-anchor="middle" class="box-text">切换本机/远程模式不会迁移数据</text>
+  <text x="790" y="940" text-anchor="middle" class="box-text">修改本地文件夹也不会自动搬运已有照片</text>
+
+  <path d="M790 796 L790 836 L490 836 L490 900" fill="none" stroke="#64748b" stroke-width="2.5" marker-end="url(#arrow-slate)"/>
+  <text x="680" y="830" class="tiny">远程模式与本机模式都会汇入同一组日常浏览操作</text>
+
+  <line x1="790" y1="966" x2="790" y2="1080" stroke="#fb7185" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrow-rose)"/>
+  <line x1="490" y1="1104" x2="490" y2="1168" stroke="#22d3ee" stroke-width="2.5" marker-end="url(#arrow-cyan)"/>
+
+  <rect x="358" y="1172" width="264" height="56" rx="25" fill="#0f172a"/>
+  <rect x="358" y="1172" width="264" height="56" rx="25" fill="rgba(59,130,246,0.3)" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="490" y="1195" text-anchor="middle" class="box-title">完成</text>
+  <text x="490" y="1213" text-anchor="middle" class="box-text">进入日常使用阶段</text>
+
+  <rect x="40" y="1290" width="900" height="150" rx="12" fill="none" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8,4"/>
+  <text x="56" y="1312" fill="#fbbf24" font-size="10" font-weight="600">当前版本提示</text>
+  <text x="64" y="1340" class="box-text">1. 已支持：本机/远程切换、首次建库、打开已有库、时间轴浏览、原图/视频查看、收藏、相册。</text>
+  <text x="64" y="1364" class="box-text">2. 当前未启用或能力受限：搜索、智能搜索、地图、人脸识别、OCR、分享链接、回收站。</text>
+  <text x="64" y="1388" class="box-text">3. HEIC/HEIF 在 Windows 下可能首次生成缩略图较慢，属于兼容解码路径的正常现象。</text>
+</svg>

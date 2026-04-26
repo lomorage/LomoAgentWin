@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lomo Photo Viewer - Architecture Overview</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f7fafc;
+      color: #2d3748;
+      line-height: 1.6;
+    }
+    h1 {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 40px 30px;
+      border-radius: 8px;
+      margin-bottom: 30px;
+      font-size: 28px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    h1 .subtitle {
+      display: block;
+      font-size: 16px;
+      font-weight: 400;
+      opacity: 0.9;
+      margin-top: 8px;
+    }
+    h2 {
+      font-size: 22px;
+      color: #2d3748;
+      margin-bottom: 20px;
+      padding-bottom: 8px;
+      border-bottom: 3px solid #667eea;
+      display: inline-block;
+    }
+    h3 {
+      font-size: 16px;
+      color: #4a5568;
+      margin-bottom: 10px;
+    }
+    .section {
+      margin: 40px 0;
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-top: 20px;
+    }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+      margin-top: 20px;
+    }
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-top: 20px;
+    }
+    .card {
+      background: #f7fafc;
+      padding: 20px;
+      border-radius: 6px;
+      border-left: 4px solid #667eea;
+    }
+    .card.data { border-left-color: #4299e1; }
+    .card.processing { border-left-color: #ed8936; }
+    .card.ai { border-left-color: #9f7aea; }
+    .card.success { border-left-color: #48bb78; }
+    .card h3 { color: #1a202c; margin-bottom: 12px; }
+    .card ul { list-style: none; padding-left: 0; }
+    .card li {
+      padding: 4px 0;
+      padding-left: 18px;
+      position: relative;
+      font-size: 14px;
+    }
+    .card li::before {
+      content: '▸';
+      position: absolute;
+      left: 0;
+      color: #667eea;
+    }
+    .card.data li::before { color: #4299e1; }
+    .card.processing li::before { color: #ed8936; }
+    .card.ai li::before { color: #9f7aea; }
+    .card.success li::before { color: #48bb78; }
+    svg { max-width: 100%; display: block; margin: 20px auto; }
+    .metric {
+      background: white;
+      padding: 16px;
+      border-radius: 6px;
+      text-align: center;
+      border: 1px solid #e2e8f0;
+    }
+    .metric .value {
+      font-size: 28px;
+      font-weight: 700;
+      color: #667eea;
+    }
+    .metric .label {
+      font-size: 12px;
+      color: #718096;
+      text-transform: uppercase;
+      margin-top: 4px;
+    }
+    .tech-badge {
+      display: inline-block;
+      padding: 4px 10px;
+      background: #edf2f7;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #4a5568;
+      margin: 2px;
+    }
+    .tech-badge.rust { background: #fef3e0; color: #d69e2e; }
+    .tech-badge.node { background: #e6fffa; color: #2f855a; }
+    .tech-badge.svelte { background: #fff5f5; color: #e53e3e; }
+    .tech-badge.tauri { background: #ebf4ff; color: #3182ce; }
+    .layer {
+      background: white;
+      padding: 16px 20px;
+      border-radius: 6px;
+      margin: 8px 0;
+      border: 2px solid #e2e8f0;
+      position: relative;
+    }
+    .layer.ui { background: linear-gradient(135deg, #f0f4ff 0%, #e8f0fe 100%); border-color: #3182ce; }
+    .layer.api { background: linear-gradient(135deg, #fff5e8 0%, #fef3e0 100%); border-color: #ed8936; }
+    .layer.backend { background: linear-gradient(135deg, #f0fff4 0%, #e6fffa 100%); border-color: #48bb78; }
+    .layer.storage { background: linear-gradient(135deg, #faf5ff 0%, #e9d8fd 100%); border-color: #9f7aea; }
+    .layer-title {
+      font-weight: 700;
+      color: #1a202c;
+      margin-bottom: 8px;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .layer-items {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .layer-item {
+      background: white;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 13px;
+      border: 1px solid #cbd5e0;
+      font-family: 'Consolas', 'Monaco', monospace;
+    }
+    .callout {
+      background: #ebf8ff;
+      border-left: 4px solid #3182ce;
+      padding: 12px 16px;
+      margin: 16px 0;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    .callout.warn {
+      background: #fffaf0;
+      border-left-color: #dd6b20;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      font-size: 14px;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    th { background: #f7fafc; font-weight: 600; color: #4a5568; }
+    td code {
+      background: #edf2f7;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 12px;
+      color: #d53f8c;
+    }
+  </style>
+</head>
+<body>
+
+<h1>
+  Lomo Photo Viewer — Architecture Overview
+  <span class="subtitle">Tauri v2 Desktop App · Immich Frontend · Lomo Backend</span>
+</h1>
+
+<!-- ───────────────── Business Context ───────────────── -->
+<section class="section">
+  <h2>Business Context</h2>
+  <div class="grid-2">
+    <div class="card">
+      <h3>🎯 Objectives</h3>
+      <ul>
+        <li>Desktop-native photo viewer for personal photo libraries</li>
+        <li>Reuse Immich's rich web UI without Immich's heavy backend</li>
+        <li>Support both bundled (local) and remote self-hosted servers</li>
+        <li>Simple single-installer distribution (NSIS)</li>
+      </ul>
+    </div>
+    <div class="card success">
+      <h3>👥 Users &amp; Value</h3>
+      <ul>
+        <li>Home users with personal photo collections</li>
+        <li>Self-hosters running <code>lomod</code> on a NAS or server</li>
+        <li>No Immich server setup, Docker, or Postgres required</li>
+        <li>HEIC / HEIF support out-of-the-box on Windows</li>
+      </ul>
+    </div>
+  </div>
+  <div class="grid-4" style="margin-top: 24px;">
+    <div class="metric"><div class="value">3</div><div class="label">Runtime Processes</div></div>
+    <div class="metric"><div class="value">2</div><div class="label">Backend Modes</div></div>
+    <div class="metric"><div class="value">91<span style="font-size:14px">MB</span></div><div class="label">Installer Size</div></div>
+    <div class="metric"><div class="value">:3001</div><div class="label">Proxy Port</div></div>
+  </div>
+</section>
+
+<!-- ───────────────── Data Flow ───────────────── -->
+<section class="section">
+  <h2>Data Flow</h2>
+  <p style="color:#4a5568;margin-bottom:12px;">
+    The Tauri WebView loads the Immich SPA through the proxy. The proxy translates Immich REST calls
+    into lomo-backend API calls, serving thumbnails, metadata, and timeline buckets.
+  </p>
+
+  <svg viewBox="0 0 900 420" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#4a5568"/>
+      </marker>
+    </defs>
+
+    <!-- User -->
+    <g>
+      <circle cx="60" cy="210" r="28" fill="#e2e8f0" stroke="#4a5568" stroke-width="2"/>
+      <text x="60" y="215" text-anchor="middle" font-size="12" font-weight="600">User</text>
+      <text x="60" y="260" text-anchor="middle" font-size="10" fill="#718096">Desktop window</text>
+    </g>
+
+    <!-- Tauri WebView -->
+    <g>
+      <rect x="130" y="170" width="140" height="90" rx="6" fill="#ebf4ff" stroke="#3182ce" stroke-width="2"/>
+      <text x="200" y="195" text-anchor="middle" font-size="13" font-weight="700" fill="#2c5282">Tauri WebView</text>
+      <text x="200" y="215" text-anchor="middle" font-size="11" fill="#4a5568">Immich SPA</text>
+      <text x="200" y="232" text-anchor="middle" font-size="11" fill="#4a5568">(SvelteKit static)</text>
+      <text x="200" y="250" text-anchor="middle" font-size="10" fill="#718096">window.__TAURI__</text>
+    </g>
+
+    <!-- Tauri Core (IPC) -->
+    <g>
+      <rect x="130" y="50" width="140" height="80" rx="6" fill="#fef3e0" stroke="#d69e2e" stroke-width="2"/>
+      <text x="200" y="75" text-anchor="middle" font-size="13" font-weight="700" fill="#744210">Tauri Core (Rust)</text>
+      <text x="200" y="95" text-anchor="middle" font-size="11" fill="#4a5568">main.rs · IPC</text>
+      <text x="200" y="112" text-anchor="middle" font-size="10" fill="#718096">pick_folder, save_app_settings…</text>
+    </g>
+
+    <!-- Proxy -->
+    <g>
+      <rect x="340" y="170" width="160" height="90" rx="6" fill="#fff5e8" stroke="#ed8936" stroke-width="2"/>
+      <text x="420" y="195" text-anchor="middle" font-size="13" font-weight="700" fill="#7b341e">Proxy (Node.js)</text>
+      <text x="420" y="215" text-anchor="middle" font-size="11" fill="#4a5568">Express + Socket.IO</text>
+      <text x="420" y="232" text-anchor="middle" font-size="11" fill="#4a5568">Port 3001</text>
+      <text x="420" y="250" text-anchor="middle" font-size="10" fill="#718096">API translation layer</text>
+    </g>
+
+    <!-- Lomo Backend -->
+    <g>
+      <rect x="570" y="120" width="160" height="90" rx="6" fill="#f0fff4" stroke="#48bb78" stroke-width="2"/>
+      <text x="650" y="145" text-anchor="middle" font-size="13" font-weight="700" fill="#22543d">lomod.exe (Local)</text>
+      <text x="650" y="165" text-anchor="middle" font-size="11" fill="#4a5568">Go binary</text>
+      <text x="650" y="182" text-anchor="middle" font-size="11" fill="#4a5568">Port 8000</text>
+      <text x="650" y="200" text-anchor="middle" font-size="10" fill="#718096">Child process of Tauri</text>
+    </g>
+
+    <g>
+      <rect x="570" y="230" width="160" height="90" rx="6" fill="#faf5ff" stroke="#9f7aea" stroke-width="2" stroke-dasharray="4"/>
+      <text x="650" y="255" text-anchor="middle" font-size="13" font-weight="700" fill="#44337a">Remote lomod</text>
+      <text x="650" y="275" text-anchor="middle" font-size="11" fill="#4a5568">User-specified URL</text>
+      <text x="650" y="292" text-anchor="middle" font-size="11" fill="#4a5568">HTTP(S)</text>
+      <text x="650" y="310" text-anchor="middle" font-size="10" fill="#718096">NAS / home server</text>
+    </g>
+
+    <!-- Storage -->
+    <g>
+      <rect x="790" y="170" width="100" height="90" rx="6" fill="#faf5ff" stroke="#9f7aea" stroke-width="2"/>
+      <text x="840" y="195" text-anchor="middle" font-size="12" font-weight="700" fill="#44337a">Photos</text>
+      <text x="840" y="215" text-anchor="middle" font-size="10" fill="#4a5568">Filesystem</text>
+      <text x="840" y="232" text-anchor="middle" font-size="10" fill="#4a5568">(photos_dir)</text>
+      <text x="840" y="250" text-anchor="middle" font-size="10" fill="#718096">JPEG · HEIC · MP4</text>
+    </g>
+
+    <!-- Arrows -->
+    <path d="M88,210 L130,210" stroke="#4a5568" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M200,170 L200,130" stroke="#4a5568" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="4"/>
+    <path d="M200,130 L200,170" stroke="#4a5568" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="4"/>
+    <text x="215" y="152" font-size="10" fill="#718096">IPC</text>
+
+    <path d="M270,215 L340,215" stroke="#4a5568" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="288" y="208" font-size="10" fill="#718096">HTTP /api/*</text>
+
+    <path d="M500,200 L570,170" stroke="#4a5568" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="518" y="175" font-size="10" fill="#718096">local mode</text>
+
+    <path d="M500,230 L570,265" stroke="#9f7aea" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="4"/>
+    <text x="515" y="265" font-size="10" fill="#9f7aea">remote</text>
+
+    <path d="M730,190 L790,210" stroke="#4a5568" stroke-width="2" marker-end="url(#arrow)"/>
+
+    <!-- Labels -->
+    <text x="450" y="30" font-size="13" font-weight="700" fill="#2d3748" text-anchor="middle">Request / Response Flow</text>
+  </svg>
+</section>
+
+<!-- ───────────────── Processing Pipeline ───────────────── -->
+<section class="section">
+  <h2>Processing Pipeline — Thumbnail Request</h2>
+  <svg viewBox="0 0 1000 240" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#4a5568"/>
+      </marker>
+    </defs>
+
+    <!-- Stages -->
+    <g>
+      <rect x="10" y="80" width="150" height="80" rx="6" fill="#4299e1"/>
+      <text x="85" y="110" text-anchor="middle" fill="white" font-size="13" font-weight="700">1. Request</text>
+      <text x="85" y="130" text-anchor="middle" fill="white" font-size="11">GET /api/assets/</text>
+      <text x="85" y="145" text-anchor="middle" fill="white" font-size="11">{id}/thumbnail</text>
+    </g>
+
+    <g>
+      <rect x="200" y="80" width="150" height="80" rx="6" fill="#ed8936"/>
+      <text x="275" y="110" text-anchor="middle" fill="white" font-size="13" font-weight="700">2. Session</text>
+      <text x="275" y="130" text-anchor="middle" fill="white" font-size="11">Read lomo_session</text>
+      <text x="275" y="145" text-anchor="middle" fill="white" font-size="11">cookie → token</text>
+    </g>
+
+    <g>
+      <rect x="390" y="80" width="150" height="80" rx="6" fill="#ed8936"/>
+      <text x="465" y="110" text-anchor="middle" fill="white" font-size="13" font-weight="700">3. Fetch Asset</text>
+      <text x="465" y="130" text-anchor="middle" fill="white" font-size="11">HTTP GET from</text>
+      <text x="465" y="145" text-anchor="middle" fill="white" font-size="11">serverUrl/assets</text>
+    </g>
+
+    <g>
+      <rect x="580" y="80" width="150" height="80" rx="6" fill="#9f7aea"/>
+      <text x="655" y="105" text-anchor="middle" fill="white" font-size="13" font-weight="700">4. Decode</text>
+      <text x="655" y="125" text-anchor="middle" fill="white" font-size="10">HEIC: heic-convert</text>
+      <text x="655" y="140" text-anchor="middle" fill="white" font-size="10">JPEG/PNG: sharp</text>
+      <text x="655" y="155" text-anchor="middle" fill="white" font-size="10">(resize)</text>
+    </g>
+
+    <g>
+      <rect x="770" y="80" width="150" height="80" rx="6" fill="#48bb78"/>
+      <text x="845" y="110" text-anchor="middle" fill="white" font-size="13" font-weight="700">5. Response</text>
+      <text x="845" y="130" text-anchor="middle" fill="white" font-size="11">image/jpeg</text>
+      <text x="845" y="145" text-anchor="middle" fill="white" font-size="11">Streamed to WebView</text>
+    </g>
+
+    <!-- Arrows -->
+    <path d="M160,120 L200,120" stroke="#4a5568" stroke-width="2" marker-end="url(#arr2)"/>
+    <path d="M350,120 L390,120" stroke="#4a5568" stroke-width="2" marker-end="url(#arr2)"/>
+    <path d="M540,120 L580,120" stroke="#4a5568" stroke-width="2" marker-end="url(#arr2)"/>
+    <path d="M730,120 L770,120" stroke="#4a5568" stroke-width="2" marker-end="url(#arr2)"/>
+
+    <!-- Labels -->
+    <text x="500" y="40" font-size="13" font-weight="700" fill="#2d3748" text-anchor="middle">Asset Thumbnail Pipeline (proxy/routes/assets.ts)</text>
+    <text x="500" y="220" font-size="11" fill="#718096" text-anchor="middle">
+      Falls back to sharpFallbackThumbnail() for HEIC since Sharp's Windows prebuilt lacks HEVC decoder.
+    </text>
+  </svg>
+</section>
+
+<!-- ───────────────── System Architecture Layers ───────────────── -->
+<section class="section">
+  <h2>System Architecture</h2>
+
+  <div class="layer ui">
+    <div class="layer-title">🖥️ UI Layer — Immich SvelteKit SPA</div>
+    <p style="font-size:13px;color:#4a5568;margin-bottom:10px;">
+      Loaded from <code>submodules/immich/web/</code>, built as static SPA, bundled into <code>web.zip</code>,
+      extracted to <code>%AppData%\com.lomoware.photoviewer\web</code> at runtime.
+    </p>
+    <div class="layer-items">
+      <span class="layer-item">SvelteKit 5 (runes)</span>
+      <span class="layer-item">adapter-static</span>
+      <span class="layer-item">@immich/ui</span>
+      <span class="layer-item">Tailwind CSS</span>
+      <span class="layer-item">Socket.IO client</span>
+      <span class="layer-item">Tauri JS bindings (core.invoke)</span>
+    </div>
+  </div>
+
+  <div class="layer api">
+    <div class="layer-title">🔌 API Translation Layer — Proxy</div>
+    <p style="font-size:13px;color:#4a5568;margin-bottom:10px;">
+      <code>proxy/server.ts</code> on port 3001. Translates Immich REST ↔ lomo-backend. Serves the SPA statically.
+    </p>
+    <div class="layer-items">
+      <span class="layer-item">Express.js</span>
+      <span class="layer-item">Socket.IO server</span>
+      <span class="layer-item">routes/auth.ts</span>
+      <span class="layer-item">routes/timeline.ts</span>
+      <span class="layer-item">routes/assets.ts</span>
+      <span class="layer-item">routes/albums.ts</span>
+      <span class="layer-item">routes/stubs.ts</span>
+      <span class="layer-item">heic-convert</span>
+      <span class="layer-item">sharp (image resize)</span>
+      <span class="layer-item">node-fetch</span>
+    </div>
+  </div>
+
+  <div class="layer backend">
+    <div class="layer-title">🦀 Desktop Shell — Tauri Core (Rust)</div>
+    <p style="font-size:13px;color:#4a5568;margin-bottom:10px;">
+      <code>src-tauri/src/main.rs</code> launches child processes (lomod, proxy), exposes IPC, manages config.
+    </p>
+    <div class="layer-items">
+      <span class="layer-item">tauri v2</span>
+      <span class="layer-item">rfd (file dialog)</span>
+      <span class="layer-item">rusqlite (admin DB)</span>
+      <span class="layer-item">serde / serde_json</span>
+      <span class="layer-item">argon2 (password hash)</span>
+      <span class="layer-item">IPC: get_app_settings</span>
+      <span class="layer-item">IPC: save_app_settings</span>
+      <span class="layer-item">IPC: pick_folder</span>
+      <span class="layer-item">IPC: complete_initial_setup</span>
+    </div>
+  </div>
+
+  <div class="layer storage">
+    <div class="layer-title">💾 Storage &amp; Backend — lomo-backend + Filesystem</div>
+    <p style="font-size:13px;color:#4a5568;margin-bottom:10px;">
+      <code>lomod.exe</code> serves on port 8000 (local) or a user-specified remote URL.
+      Assets identified by <strong>filename</strong> (not UUID). Status bits encode favorites.
+    </p>
+    <div class="layer-items">
+      <span class="layer-item">lomod.exe (Go)</span>
+      <span class="layer-item">Merkletree timeline buckets</span>
+      <span class="layer-item">/login · /mount · /assets</span>
+      <span class="layer-item">Photos dir (user-selected)</span>
+      <span class="layer-item">config.json</span>
+      <span class="layer-item">web.zip · sharp.zip (extracted)</span>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────── Features ───────────────── -->
+<section class="section">
+  <h2>Features</h2>
+  <div class="grid-3">
+    <div class="card data">
+      <h3>📅 Timeline</h3>
+      <ul>
+        <li>Merkletree-based date bucketing</li>
+        <li>Month-detail fallback for remote hash-only trees</li>
+        <li>Favorites (Status &amp; 8 bit)</li>
+        <li>Album grouping</li>
+      </ul>
+    </div>
+    <div class="card processing">
+      <h3>🖼️ Image Handling</h3>
+      <ul>
+        <li>Thumbnail generation (sharp)</li>
+        <li>HEIC/HEIF decode via heic-convert</li>
+        <li>EXIF orientation respected</li>
+        <li>Streaming full-resolution originals</li>
+      </ul>
+    </div>
+    <div class="card ai">
+      <h3>🔀 Dual-Mode Backend</h3>
+      <ul>
+        <li>Local: bundled lomod.exe child process</li>
+        <li>Remote: user-entered server URL</li>
+        <li>Settings page with Browse / Save</li>
+        <li>Proxy restarts on mode switch</li>
+      </ul>
+    </div>
+    <div class="card success">
+      <h3>🔐 Auth &amp; Session</h3>
+      <ul>
+        <li>Argon2id password hashing</li>
+        <li>Basic-auth login to lomo-backend</li>
+        <li>Cookie-based session (lomo_session)</li>
+        <li>Per-session token + serverUrl</li>
+      </ul>
+    </div>
+    <div class="card data">
+      <h3>🚦 Server Status</h3>
+      <ul>
+        <li>Socket.IO server in proxy</li>
+        <li>on_server_version emitted on connect</li>
+        <li>UI shows "Server Online" + version</li>
+      </ul>
+    </div>
+    <div class="card processing">
+      <h3>⚙️ First-Run Setup</h3>
+      <ul>
+        <li>Photos-folder picker on first launch</li>
+        <li>Admin user bootstrap via rusqlite</li>
+        <li>config.json persisted in AppData</li>
+        <li>Lomod restart on photos_dir change</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────── Non-Functional Requirements ───────────────── -->
+<section class="section">
+  <h2>Non-Functional Requirements</h2>
+  <table>
+    <thead>
+      <tr><th>Concern</th><th>Approach</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Packaging</strong></td>
+        <td>Single NSIS installer. Resources zipped to <code>web.zip</code> &amp; <code>sharp.zip</code>, extracted on first launch.</td>
+      </tr>
+      <tr>
+        <td><strong>Local/Remote isolation</strong></td>
+        <td>Proxy routes always use <code>session.serverUrl</code>. No <code>localhost</code> hardcoding. Tauri IPC guarded in UI.</td>
+      </tr>
+      <tr>
+        <td><strong>Startup hygiene</strong></td>
+        <td>Stale <code>lomod.exe</code> killed via <code>taskkill /F /IM lomod.exe</code> before spawning new one.</td>
+      </tr>
+      <tr>
+        <td><strong>Path handling</strong></td>
+        <td>Windows <code>\\?\</code> extended-length prefix stripped by <code>clean_path()</code> for Node.js compatibility.</td>
+      </tr>
+      <tr>
+        <td><strong>Build reproducibility</strong></td>
+        <td><code>build-tauri.ps1</code> orchestrates web → proxy → Tauri with <code>-SkipWeb</code> / <code>-SkipProxy</code> flags.</td>
+      </tr>
+      <tr>
+        <td><strong>Cache staleness</strong></td>
+        <td>Extracted web dir must be deleted when web.zip is updated (documented in CLAUDE.md, enforced by convention).</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ───────────────── Deployment ───────────────── -->
+<section class="section">
+  <h2>Deployment</h2>
+  <div class="grid-2">
+    <div class="card">
+      <h3>📦 Build Artifacts</h3>
+      <ul>
+        <li><code>lomo-photo-viewer.exe</code> — main Tauri binary</li>
+        <li><code>LomoPhotoViewer_1.0.0_x64-setup.exe</code> — NSIS installer (~91 MB)</li>
+        <li><code>proxy.exe</code> — embedded in resources</li>
+        <li><code>lomod/lomod.exe</code> — embedded (from <code>lomoagent.msi</code>)</li>
+        <li><code>web.zip</code> · <code>sharp.zip</code> — extracted at runtime</li>
+      </ul>
+    </div>
+    <div class="card success">
+      <h3>🚀 Launch Sequence</h3>
+      <ul>
+        <li>Kill any stale <code>lomod.exe</code> processes</li>
+        <li>Extract <code>web.zip</code>/<code>sharp.zip</code> to AppData if newer</li>
+        <li>Read/create <code>config.json</code> (backend mode + photos_dir)</li>
+        <li>Spawn <code>lomod.exe</code> (local mode only)</li>
+        <li>Spawn <code>proxy.exe</code> on port 3001</li>
+        <li>Tauri WebView navigates to <code>http://localhost:3001</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout">
+    <strong>Prerequisite:</strong> <code>src-tauri/resources/lomod/lomod.exe</code> must exist before
+    <code>cargo tauri build</code> — extracted from <code>lomoagent.msi</code>.
+  </div>
+
+  <div class="callout warn">
+    <strong>Iteration gotcha:</strong> after editing Svelte sources, all three steps are mandatory —
+    clean build (<code>rm -rf build .svelte-kit</code>), repackage <code>web.zip</code> to both
+    <code>target/debug/</code> and <code>resources/</code>, and delete the extracted web dir in AppData.
+    Skipping any step leaves the old UI in place.
+  </div>
+</section>
+
+<!-- ───────────────── Tech Stack ───────────────── -->
+<section class="section">
+  <h2>Tech Stack</h2>
+  <div style="margin-top: 16px;">
+    <h3 style="margin-bottom: 8px;">Desktop</h3>
+    <span class="tech-badge tauri">Tauri v2</span>
+    <span class="tech-badge rust">Rust</span>
+    <span class="tech-badge">rfd</span>
+    <span class="tech-badge">rusqlite</span>
+    <span class="tech-badge">argon2</span>
+    <span class="tech-badge">serde</span>
+  </div>
+  <div style="margin-top: 16px;">
+    <h3 style="margin-bottom: 8px;">Proxy</h3>
+    <span class="tech-badge node">Node.js 20</span>
+    <span class="tech-badge">Express</span>
+    <span class="tech-badge">Socket.IO</span>
+    <span class="tech-badge">sharp</span>
+    <span class="tech-badge">heic-convert</span>
+    <span class="tech-badge">esbuild</span>
+    <span class="tech-badge">pkg</span>
+  </div>
+  <div style="margin-top: 16px;">
+    <h3 style="margin-bottom: 8px;">Frontend</h3>
+    <span class="tech-badge svelte">SvelteKit 5</span>
+    <span class="tech-badge">TypeScript</span>
+    <span class="tech-badge">Tailwind CSS</span>
+    <span class="tech-badge">@immich/ui</span>
+    <span class="tech-badge">Vite</span>
+    <span class="tech-badge">pnpm</span>
+  </div>
+  <div style="margin-top: 16px;">
+    <h3 style="margin-bottom: 8px;">Backend (External)</h3>
+    <span class="tech-badge">lomo-backend (Go)</span>
+    <span class="tech-badge">Merkletree API</span>
+  </div>
+</section>
+
+<footer style="text-align: center; padding: 24px; color: #718096; font-size: 13px;">
+  Lomo Photo Viewer · Architecture Document · Generated 2026-04-18
+</footer>
+
+</body>
+</html>
