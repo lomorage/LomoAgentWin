@@ -1,9 +1,14 @@
 import { Router } from 'express';
 import fetch from 'node-fetch';
 import { getAssetRatios } from '../dimensions-cache';
+import {
+  fetchAssetDateInfos,
+  fetchAssetStatusMapForDates,
+  isFavoriteStatus,
+  type LomoAssetDateInfo,
+  parseBooleanQueryValue,
+} from '../lomo-assets';
 import { getLomoToken } from '../session';
-
-const DEFAULT_LOMO_URL = process.env.LOMO_BACKEND_URL || 'http://192.168.1.73:8000';
 
 export const timelineRouter = Router();
 
@@ -57,7 +62,7 @@ function isVideoExt(name: string): boolean {
 
 // Cache for album assets grouped by month: albumId -> { data, timestamp }
 const albumBucketCache = new Map<string, {
-  data: Map<string, Array<{ name: string; date: string }>>;
+  data: Map<string, LomoAssetDateInfo[]>;
   timestamp: number;
 }>();
 const ALBUM_CACHE_TTL = 60_000; // 60 seconds
@@ -74,7 +79,7 @@ async function fetchAlbumAssetsByMonth(
   albumId: string,
   token: string,
   serverUrl: string,
-): Promise<Map<string, Array<{ name: string; date: string }>>> {
+): Promise<Map<string, LomoAssetDateInfo[]>> {
   // Check cache
   const cached = albumBucketCache.get(albumId);
   if (cached && Date.now() - cached.timestamp < ALBUM_CACHE_TTL) {
@@ -90,28 +95,8 @@ async function fetchAlbumAssetsByMonth(
   }
 
   const assetNames = await assetsRes.json() as string[];
-  const byMonth = new Map<string, Array<{ name: string; date: string }>>();
-
-  // Fetch metadata in batches of 10 to avoid overwhelming lomo-backend
-  const assets: Array<{ name: string; date: string }> = [];
-  for (let i = 0; i < assetNames.length; i += 10) {
-    const batch = assetNames.slice(i, i + 10);
-    const batchResults = await Promise.all(
-      batch.map(async (name) => {
-        try {
-          const metaRes = await fetch(`${serverUrl}/asset/metadata/${name}?token=${token}`);
-          if (metaRes.ok) {
-            const meta = await metaRes.json() as { Date?: string };
-            return { name, date: meta.Date || '2000-01-01T00:00:00Z' };
-          }
-        } catch {
-          // ignore individual failures
-        }
-        return { name, date: '2000-01-01T00:00:00Z' };
-      }),
-    );
-    assets.push(...batchResults);
-  }
+  const byMonth = new Map<string, LomoAssetDateInfo[]>();
+  const assets = await fetchAssetDateInfos(serverUrl, token, assetNames);
 
   for (const asset of assets) {
     const d = new Date(asset.date);
@@ -142,15 +127,25 @@ timelineRouter.get('/buckets', async (req, res) => {
   }
 
   const albumId = req.query.albumId as string | undefined;
+  const favoriteFilter = parseBooleanQueryValue(req.query.isFavorite);
 
   try {
     if (albumId) {
       // Album-specific buckets
       const byMonth = await fetchAlbumAssetsByMonth(albumId, auth.token, auth.serverUrl);
-      const buckets: Array<{ timeBucket: string; count: number }> = [];
-      for (const [bucket, assets] of byMonth) {
-        buckets.push({ timeBucket: bucket, count: assets.length });
-      }
+      const bucketResults = await Promise.all(
+        Array.from(byMonth.entries()).map(async ([bucket, assets]) => {
+          if (favoriteFilter === undefined) {
+            return { timeBucket: bucket, count: assets.length };
+          }
+
+          const statusMap = await fetchAssetStatusMapForDates(auth.serverUrl, auth.token, assets);
+          const count = assets.filter((asset) => isFavoriteStatus(statusMap.get(asset.name) ?? 0) === favoriteFilter).length;
+          return { timeBucket: bucket, count };
+        }),
+      );
+
+      const buckets = bucketResults.filter((bucket) => bucket.count > 0);
       buckets.sort((a, b) => b.timeBucket.localeCompare(a.timeBucket));
       return res.json(buckets);
     }
@@ -163,25 +158,57 @@ timelineRouter.get('/buckets', async (req, res) => {
     }
 
     const data = await lomoRes.json() as LomoYearList;
-    const buckets: Array<{ timeBucket: string; count: number }> = [];
+    const years = data.Years || [];
+    console.log(`[timeline] merkletree from ${auth.serverUrl}: years=${years.length}`);
 
-    for (const year of data.Years || []) {
+    // Collect all year/month pairs from the root tree
+    const monthEntries: Array<{ year: number; month: number; days: LomoDay[] }> = [];
+    for (const year of years) {
       for (const month of year.Months || []) {
-        let count = 0;
-        for (const day of month.Days || []) {
-          count += (day.Assets || []).length;
+        monthEntries.push({ year: year.Year, month: month.Month, days: month.Days || [] });
+      }
+    }
+
+    // If the root tree doesn't include day/asset data (Days empty), fetch each month detail
+    const rootHasAssets = monthEntries.some((m) => m.days.length > 0);
+    if (!rootHasAssets && monthEntries.length > 0) {
+      console.log(`[timeline] root tree has no day detail, fetching ${monthEntries.length} month(s) individually`);
+      await Promise.all(
+        monthEntries.map(async (entry) => {
+          try {
+            const res = await fetch(
+              `${auth.serverUrl}/assets/merkletree/${entry.year}/${entry.month}?token=${auth.token}`,
+            );
+            if (res.ok) {
+              const monthData = await res.json() as LomoMonthDetail;
+              entry.days = monthData.Days || [];
+            }
+          } catch {
+            // leave days empty for this month
+          }
+        }),
+      );
+    }
+
+    const buckets: Array<{ timeBucket: string; count: number }> = [];
+    for (const entry of monthEntries) {
+      let count = 0;
+      for (const day of entry.days) {
+        for (const asset of day.Assets || []) {
+          if (favoriteFilter === undefined || isFavoriteStatus(asset.Status) === favoriteFilter) {
+            count += 1;
+          }
         }
-        // Format: YYYY-MM-01T00:00:00.000Z
-        const mm = String(month.Month).padStart(2, '0');
-        buckets.push({
-          timeBucket: `${year.Year}-${mm}-01T00:00:00.000Z`,
-          count,
-        });
+      }
+      if (count > 0) {
+        const mm = String(entry.month).padStart(2, '0');
+        buckets.push({ timeBucket: `${entry.year}-${mm}-01T00:00:00.000Z`, count });
       }
     }
 
     // Sort descending (newest first) — Immich default
     buckets.sort((a, b) => b.timeBucket.localeCompare(a.timeBucket));
+    console.log(`[timeline] returning ${buckets.length} buckets`);
 
     res.json(buckets);
   } catch (error) {
@@ -206,6 +233,7 @@ timelineRouter.get('/bucket', async (req, res) => {
   }
 
   const albumId = req.query.albumId as string | undefined;
+  const favoriteFilter = parseBooleanQueryValue(req.query.isFavorite);
 
   // Parse year and month from timeBucket (e.g., "2024-03-01T00:00:00.000Z")
   const date = new Date(timeBucket);
@@ -218,27 +246,32 @@ timelineRouter.get('/bucket', async (req, res) => {
       const byMonth = await fetchAlbumAssetsByMonth(albumId, auth.token, auth.serverUrl);
       const bucketKey = `${year}-${String(month).padStart(2, '0')}-01T00:00:00.000Z`;
       const assets = byMonth.get(bucketKey) || [];
+      const statusMap = await fetchAssetStatusMapForDates(auth.serverUrl, auth.token, assets);
+      const filteredAssets =
+        favoriteFilter === undefined
+          ? assets
+          : assets.filter((asset) => isFavoriteStatus(statusMap.get(asset.name) ?? 0) === favoriteFilter);
 
       // Probe actual dimensions for album assets
-      const albumAssetNames = assets.map(a => a.name);
+      const albumAssetNames = filteredAssets.map(a => a.name);
       const albumRatioMap = await getAssetRatios(albumAssetNames, auth.token, auth.serverUrl);
 
       const result = {
-        id: assets.map(a => a.name),
-        city: assets.map(() => null),
-        country: assets.map(() => null),
-        duration: assets.map(a => isVideoExt(a.name) ? '0:00:00.000000' : null),
-        fileCreatedAt: assets.map(a => a.date),
-        isFavorite: assets.map(() => false),
-        isImage: assets.map(a => isImageExt(a.name)),
-        isTrashed: assets.map(() => false),
-        livePhotoVideoId: assets.map(() => null),
-        localOffsetHours: assets.map(() => 0),
-        ownerId: assets.map(() => auth.userId),
-        projectionType: assets.map(() => null),
-        ratio: assets.map(a => albumRatioMap.get(a.name) ?? (isVideoExt(a.name) ? 1.78 : 1.5)),
-        thumbhash: assets.map(() => null),
-        visibility: assets.map(() => 'timeline'),
+        id: filteredAssets.map(a => a.name),
+        city: filteredAssets.map(() => null),
+        country: filteredAssets.map(() => null),
+        duration: filteredAssets.map(a => isVideoExt(a.name) ? '0:00:00.000000' : null),
+        fileCreatedAt: filteredAssets.map(a => a.date),
+        isFavorite: filteredAssets.map(a => isFavoriteStatus(statusMap.get(a.name) ?? 0)),
+        isImage: filteredAssets.map(a => isImageExt(a.name)),
+        isTrashed: filteredAssets.map(() => false),
+        livePhotoVideoId: filteredAssets.map(() => null),
+        localOffsetHours: filteredAssets.map(() => 0),
+        ownerId: filteredAssets.map(() => auth.userId),
+        projectionType: filteredAssets.map(() => null),
+        ratio: filteredAssets.map(a => albumRatioMap.get(a.name) ?? (isVideoExt(a.name) ? 1.78 : 1.5)),
+        thumbhash: filteredAssets.map(() => null),
+        visibility: filteredAssets.map(() => 'timeline'),
       };
 
       return res.json(result);
@@ -259,28 +292,32 @@ timelineRouter.get('/bucket', async (req, res) => {
         allAssets.push({ asset, day: day.Day });
       }
     }
+    const filteredAssets =
+      favoriteFilter === undefined
+        ? allAssets
+        : allAssets.filter((entry) => isFavoriteStatus(entry.asset.Status) === favoriteFilter);
 
     // Probe actual dimensions for all assets in parallel
-    const assetNames = allAssets.map(a => a.asset.Name);
+    const assetNames = filteredAssets.map(a => a.asset.Name);
     const ratioMap = await getAssetRatios(assetNames, auth.token, auth.serverUrl);
 
     // Build column-oriented response (TimeBucketAssetResponseDto)
     const result = {
-      id: allAssets.map(a => a.asset.Name),
-      city: allAssets.map(() => null),
-      country: allAssets.map(() => null),
-      duration: allAssets.map(a => isVideoExt(a.asset.Name) ? '0:00:00.000000' : null),
-      fileCreatedAt: allAssets.map(a => a.asset.Date),
-      isFavorite: allAssets.map(a => (a.asset.Status & 8) !== 0),
-      isImage: allAssets.map(a => isImageExt(a.asset.Name)),
-      isTrashed: allAssets.map(() => false),
-      livePhotoVideoId: allAssets.map(() => null),
-      localOffsetHours: allAssets.map(() => 0),
-      ownerId: allAssets.map(() => auth.userId),
-      projectionType: allAssets.map(() => null),
-      ratio: allAssets.map(a => ratioMap.get(a.asset.Name) ?? (isVideoExt(a.asset.Name) ? 1.78 : 1.5)),
-      thumbhash: allAssets.map(() => null),
-      visibility: allAssets.map(a => (a.asset.Status & 2) !== 0 ? 'hidden' : 'timeline'),
+      id: filteredAssets.map(a => a.asset.Name),
+      city: filteredAssets.map(() => null),
+      country: filteredAssets.map(() => null),
+      duration: filteredAssets.map(a => isVideoExt(a.asset.Name) ? '0:00:00.000000' : null),
+      fileCreatedAt: filteredAssets.map(a => a.asset.Date),
+      isFavorite: filteredAssets.map(a => isFavoriteStatus(a.asset.Status)),
+      isImage: filteredAssets.map(a => isImageExt(a.asset.Name)),
+      isTrashed: filteredAssets.map(() => false),
+      livePhotoVideoId: filteredAssets.map(() => null),
+      localOffsetHours: filteredAssets.map(() => 0),
+      ownerId: filteredAssets.map(() => auth.userId),
+      projectionType: filteredAssets.map(() => null),
+      ratio: filteredAssets.map(a => ratioMap.get(a.asset.Name) ?? (isVideoExt(a.asset.Name) ? 1.78 : 1.5)),
+      thumbhash: filteredAssets.map(() => null),
+      visibility: filteredAssets.map(a => (a.asset.Status & 2) !== 0 ? 'hidden' : 'timeline'),
     };
 
     res.json(result);

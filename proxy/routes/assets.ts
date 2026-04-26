@@ -23,6 +23,7 @@ function getSharp(): any {
   return _sharp;
 }
 import { cacheDimensions } from '../dimensions-cache';
+import { fetchAssetStatusMapForDates, isFavoriteStatus } from '../lomo-assets';
 import { getLomoToken } from '../session';
 import { clearAlbumBucketCache } from './timeline';
 import { clearAlbumListCache } from './albums';
@@ -243,8 +244,9 @@ assetsRouter.get('/:id', async (req, res) => {
     const lat = meta.Latitude && meta.Latitude !== '888' ? parseFloat(meta.Latitude) : null;
     const lng = meta.Longtitude && meta.Longtitude !== '888' ? parseFloat(meta.Longtitude) : null;
 
-    // Fetch favorite status from merkletree
-    const isFavorite = await fetchIsFavorite(auth.serverUrl, auth.token, meta.Name, meta.Date);
+    // Fetch favorite state from the backend day tree so the UI matches lomo-backend.
+    const statusMap = await fetchAssetStatusMapForDates(auth.serverUrl, auth.token, [{ name: meta.Name, date: meta.Date }]);
+    const isFavorite = isFavoriteStatus(statusMap.get(meta.Name) ?? 0);
 
     // Probe preview image to get actual dimensions
     let width: number | null = null;
@@ -414,23 +416,6 @@ async function setFavorite(serverUrl: string, token: string, ids: string[], isFa
   return true;
 }
 
-// Helper: fetch isFavorite status for an asset from merkletree
-async function fetchIsFavorite(serverUrl: string, token: string, assetName: string, dateStr: string): Promise<boolean> {
-  try {
-    const d = new Date(dateStr);
-    const year = d.getUTCFullYear();
-    const month = d.getUTCMonth() + 1;
-    const day = d.getUTCDate();
-    const res = await fetch(`${serverUrl}/assets/merkletree/${year}/${month}/${day}?token=${token}`);
-    if (!res.ok) return false;
-    const dayData = await res.json() as { Assets: Array<{ Name: string; Status: number }> };
-    const asset = dayData.Assets?.find(a => a.Name === assetName);
-    return asset ? (asset.Status & 8) !== 0 : false;
-  } catch {
-    return false;
-  }
-}
-
 // PUT /api/assets (bulk update — handles isFavorite)
 assetsRouter.put('/', async (req, res) => {
   const auth = getLomoToken(req);
@@ -490,6 +475,8 @@ assetsRouter.put('/:id', async (req, res) => {
       Date: string; Device: string; Hash: string; Name: string;
       Latitude?: string; Longtitude?: string;
     };
+    const statusMap = await fetchAssetStatusMapForDates(auth.serverUrl, auth.token, [{ name: meta.Name, date: meta.Date }]);
+    const favoriteStatus = isFavoriteStatus(statusMap.get(meta.Name) ?? 0);
 
     res.json({
       id: meta.Name,
@@ -505,7 +492,7 @@ assetsRouter.put('/:id', async (req, res) => {
       hasMetadata: true,
       isArchived: false,
       isEdited: false,
-      isFavorite: isFavorite ?? false,
+      isFavorite: favoriteStatus,
       isOffline: false,
       isTrashed: false,
       libraryId: null,

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import fetch from 'node-fetch';
+import { fetchAssetSummaries, isFavoriteStatus } from '../lomo-assets';
 import { getLomoToken } from '../session';
 
 // LOMO_URL is now per-session via auth.serverUrl
@@ -194,22 +195,23 @@ albumsRouter.get('/:id', async (req, res) => {
       );
       if (assetsRes.ok) {
         const assetNames = await assetsRes.json() as string[];
-        thumbnailAssetId = assetNames[0] || null;
-        assets = assetNames.map((name) => ({
-          id: name,
-          deviceAssetId: name,
+        const summaries = await fetchAssetSummaries(auth.serverUrl, auth.token, assetNames);
+        thumbnailAssetId = summaries[0]?.name || null;
+        assets = summaries.map((asset) => ({
+          id: asset.name,
+          deviceAssetId: asset.name,
           ownerId: auth.userId,
           deviceId: 'lomo',
-          type: isImageExt(name) ? 'IMAGE' : 'VIDEO',
-          originalPath: name,
-          originalFileName: name,
-          originalMimeType: isImageExt(name) ? 'image/jpeg' : 'video/mp4',
+          type: isImageExt(asset.name) ? 'IMAGE' : 'VIDEO',
+          originalPath: asset.name,
+          originalFileName: asset.name,
+          originalMimeType: isImageExt(asset.name) ? 'image/jpeg' : 'video/mp4',
           thumbhash: null,
-          fileCreatedAt: album.CreateTime,
-          fileModifiedAt: album.LastModifiedTime,
-          createdAt: album.CreateTime,
-          updatedAt: album.LastModifiedTime,
-          isFavorite: false,
+          fileCreatedAt: asset.date,
+          fileModifiedAt: asset.date,
+          createdAt: asset.date,
+          updatedAt: asset.date,
+          isFavorite: isFavoriteStatus(asset.status),
           isArchived: false,
           duration: '0:00:00.000000',
           checksum: '',
