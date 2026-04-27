@@ -142,5 +142,5 @@ authRouter.post('/logout', (req, res) => {
   res.clearCookie('immich_is_authenticated', { path: '/' });
   res.clearCookie('immich_auth_type', { path: '/' });
   res.clearCookie('lomo_session', { path: '/' });
-  res.json({ successful: true, redirectUri: '/auth/login' });
+  res.json({ successful: true, redirectUri: '/auth/login?showChooser=1' });
 });
