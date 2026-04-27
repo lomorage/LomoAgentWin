@@ -353,3 +353,6 @@ Sessionx.vim
 tags
 # Persistent undo
 [._]*.un~
+
+# Local Chinese business-plan draft
+docs/lomo-commercial-plan.zh-CN.md
