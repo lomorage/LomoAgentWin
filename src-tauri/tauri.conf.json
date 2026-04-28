@@ -13,6 +13,7 @@
         "title": "Lomo Photo Viewer",
         "width": 1280,
         "height": 800,
+        "visible": false,
         "resizable": true,
         "fullscreen": false,
         "devtools": true

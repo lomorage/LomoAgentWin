@@ -3,11 +3,13 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use std::io::{self, Read as _};
+use std::net::TcpStream;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::Manager;
 
 #[cfg(target_os = "windows")]
@@ -93,7 +95,7 @@ fn write_proxy_pid(data_dir: &std::path::Path, pid: u32) {
 
 #[cfg(target_os = "windows")]
 fn listening_pids_on_port(port: u16) -> Vec<u32> {
-    let Ok(output) = Command::new("netstat").args(["-ano", "-p", "tcp"]).output() else {
+    let Ok(output) = hidden_command("netstat").args(["-ano", "-p", "tcp"]).output() else {
         return Vec::new();
     };
 
@@ -125,7 +127,7 @@ fn listening_pids_on_port(port: u16) -> Vec<u32> {
 #[cfg(target_os = "windows")]
 fn process_image_name(pid: u32) -> Option<String> {
     let filter = format!("PID eq {}", pid);
-    let output = Command::new("tasklist")
+    let output = hidden_command("tasklist")
         .args(["/FI", &filter, "/FO", "CSV", "/NH"])
         .output()
         .ok()?;
@@ -152,7 +154,7 @@ fn kill_stale_proxy(data_dir: &std::path::Path) {
     }
 
     println!("[tauri] Killing stale proxy (pid {})", pid);
-    let _ = Command::new("taskkill").args(["/F", "/PID", pid]).output();
+    let _ = hidden_command("taskkill").args(["/F", "/PID", pid]).output();
     clear_proxy_pid(data_dir);
     std::thread::sleep(std::time::Duration::from_millis(300));
 }
@@ -178,7 +180,7 @@ fn ensure_proxy_port_available(data_dir: &std::path::Path, port: u16) -> Result<
                     "[tauri] Killing stale proxy listener on port {} (pid {})",
                     port, pid
                 );
-                let _ = Command::new("taskkill")
+                let _ = hidden_command("taskkill")
                     .args(["/F", "/PID", &pid.to_string()])
                     .output();
             }
@@ -227,6 +229,279 @@ fn ensure_proxy_port_available(_data_dir: &std::path::Path, _port: u16) -> Resul
 fn configure_background_child(cmd: &mut Command) {
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(target_os = "windows")]
+fn hidden_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    configure_background_child(&mut cmd);
+    cmd
+}
+
+fn percent_encode_data_url(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+fn startup_html() -> &'static str {
+    r#"<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Starting Lomo Photo Viewer</title>
+    <style>
+      :root {
+        color: #242137;
+        background: #eeeafc;
+        font-family: "Segoe UI", sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at 20% 15%, rgba(91, 86, 214, 0.22), transparent 32%),
+          linear-gradient(135deg, #f7f4ff 0%, #e6e1f6 100%);
+      }
+      .card {
+        width: 420px;
+        padding: 34px 38px 32px;
+        border-radius: 28px;
+        background: rgba(255, 255, 255, 0.86);
+        box-shadow: 0 24px 60px rgba(50, 39, 104, 0.18);
+      }
+      .brand {
+        font-size: 22px;
+        font-weight: 700;
+        color: #4f46c7;
+        letter-spacing: -0.02em;
+      }
+      .title {
+        margin-top: 18px;
+        font-size: 26px;
+        font-weight: 700;
+        letter-spacing: -0.04em;
+      }
+      .message {
+        min-height: 24px;
+        margin-top: 10px;
+        color: #615c78;
+        font-size: 14px;
+      }
+      .track {
+        height: 12px;
+        margin-top: 28px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #ded8f2;
+      }
+      .bar {
+        width: 8%;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #544de2, #2f80ed);
+        transition: width 180ms ease;
+      }
+      .percent {
+        margin-top: 12px;
+        color: #4f46c7;
+        font-size: 13px;
+        font-weight: 700;
+        text-align: right;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <div class="brand">Lomo Photo Viewer</div>
+      <div class="title">Starting your photo library</div>
+      <div id="message" class="message">Preparing app data</div>
+      <div class="track"><div id="bar" class="bar"></div></div>
+      <div id="percent" class="percent">8%</div>
+    </main>
+    <script>
+      window.setStartupProgress = function(percent, message) {
+        const safePercent = Math.max(0, Math.min(100, Number(percent) || 0));
+        document.getElementById('bar').style.width = safePercent + '%';
+        document.getElementById('percent').textContent = Math.round(safePercent) + '%';
+        document.getElementById('message').textContent = message || '';
+      };
+    </script>
+  </body>
+</html>"#
+}
+
+fn create_startup_window(app: &tauri::App) -> Option<tauri::WebviewWindow> {
+    let url = format!(
+        "data:text/html;charset=utf-8,{}",
+        percent_encode_data_url(startup_html())
+    );
+    tauri::WebviewWindowBuilder::new(
+        app,
+        "startup",
+        tauri::WebviewUrl::External(url.parse().ok()?),
+    )
+    .title("Starting Lomo Photo Viewer")
+    .inner_size(520.0, 360.0)
+    .resizable(false)
+    .decorations(false)
+    .center()
+    .build()
+    .ok()
+}
+
+fn update_startup_progress(app: &tauri::AppHandle, percent: u8, message: &str) {
+    if let Some(window) = app.get_webview_window("startup") {
+        let message_json = serde_json::to_string(message).unwrap_or_else(|_| "\"\"".into());
+        let _ = window.eval(format!(
+            "window.setStartupProgress && window.setStartupProgress({}, {});",
+            percent, message_json
+        ));
+    }
+}
+
+fn wait_for_proxy_ready(port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(120));
+    }
+    false
+}
+
+fn run_startup(
+    app: tauri::AppHandle,
+    resource_dir: PathBuf,
+    data_dir: PathBuf,
+) -> Result<(), io::Error> {
+    update_startup_progress(&app, 8, "Preparing app data");
+    std::fs::create_dir_all(&data_dir).ok();
+
+    println!("[tauri] Resource dir: {:?}", resource_dir);
+    println!("[tauri] Data dir: {:?}", data_dir);
+
+    // Write debug log
+    let log_path = data_dir.join("tauri-debug.log");
+    let clean_resource = clean_path(&resource_dir);
+    let clean_data = clean_path(&data_dir);
+    let web_path = clean_data.join("web");
+    let proxy_path = clean_resource.join("proxy.exe");
+    let log_content = format!(
+        "resource_dir (raw): {:?}\nresource_dir (clean): {:?}\ndata_dir: {:?}\nweb_dir: {:?}\nweb_dir exists: {}\nproxy.exe exists: {}\nindex.html exists: {}\n",
+        resource_dir,
+        clean_resource,
+        clean_data,
+        web_path,
+        web_path.exists(),
+        proxy_path.exists(),
+        web_path.join("index.html").exists(),
+    );
+    std::fs::write(&log_path, &log_content).ok();
+    println!("[tauri] Debug log written to {:?}", log_path);
+
+    let config = get_app_config(&data_dir);
+    let photos_dir = resolved_local_photos_dir(&data_dir, &config);
+    std::fs::create_dir_all(&photos_dir).ok();
+    println!("[tauri] Photos dir: {:?}", photos_dir);
+    println!(
+        "[tauri] Backend mode: {}",
+        match config.active_backend_mode {
+            BackendMode::Local => "local",
+            BackendMode::Remote => "remote",
+        }
+    );
+
+    update_startup_progress(&app, 18, "Checking previous web service");
+    ensure_proxy_port_available(&data_dir, 3001)
+        .map_err(|message| io::Error::new(io::ErrorKind::AddrInUse, message))?;
+
+    update_startup_progress(&app, 34, "Loading web assets");
+    let web_dir = extract_web_zip(&resource_dir, &data_dir)
+        .map_err(|message| io::Error::new(io::ErrorKind::Other, message))?;
+    let post_extract_log = format!(
+        "{}post_extract_web_dir: {:?}\npost_extract_web_dir exists: {}\npost_extract_index.html exists: {}\n",
+        log_content,
+        web_dir,
+        web_dir.exists(),
+        web_dir.join("index.html").exists(),
+    );
+    std::fs::write(&log_path, post_extract_log).ok();
+
+    #[cfg(target_os = "windows")]
+    {
+        update_startup_progress(&app, 48, "Cleaning up previous local backend");
+        let _ = hidden_command("taskkill")
+            .args(["/F", "/IM", "lomod.exe"])
+            .output();
+        std::thread::sleep(Duration::from_millis(300));
+    }
+
+    update_startup_progress(&app, 60, "Starting local backend");
+    let lomod = if config.active_backend_mode == BackendMode::Local {
+        start_lomod(&resource_dir, &data_dir, &photos_dir)
+    } else {
+        None
+    };
+
+    update_startup_progress(&app, 76, "Starting web service");
+    let proxy = start_proxy(&resource_dir, &data_dir, &backend_url_from_config(&config))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::AddrInUse,
+                "Failed to start proxy on port 3001. Check proxy-err.log for details.",
+            )
+        })?;
+
+    update_startup_progress(&app, 88, "Waiting for web service");
+    if !wait_for_proxy_ready(3001, Duration::from_secs(8)) {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "Timed out waiting for proxy on port 3001",
+        ));
+    }
+
+    app.manage(Mutex::new(AppState {
+        lomod_process: lomod,
+        proxy_process: Some(proxy),
+        resource_dir: clean_path(&resource_dir),
+        data_dir: clean_path(&data_dir),
+    }));
+
+    update_startup_progress(&app, 96, "Opening viewer");
+    if let Some(main) = app.get_webview_window("main") {
+        let viewer_url = "http://localhost:3001"
+            .parse()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let _ = main.navigate(viewer_url);
+        let _ = main.show();
+        let _ = main.set_focus();
+
+        #[cfg(debug_assertions)]
+        main.open_devtools();
+    }
+
+    update_startup_progress(&app, 100, "Ready");
+    std::thread::sleep(Duration::from_millis(180));
+    if let Some(startup) = app.get_webview_window("startup") {
+        let _ = startup.close();
+    }
+
+    Ok(())
 }
 
 fn normalize_remote_lomod_url(value: &str) -> String {
@@ -1423,96 +1698,26 @@ fn main() {
                 .app_data_dir()
                 .expect("Failed to get app data dir");
 
-            std::fs::create_dir_all(&data_dir).ok();
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.hide();
+            }
+            create_startup_window(app);
 
-            println!("[tauri] Resource dir: {:?}", resource_dir);
-            println!("[tauri] Data dir: {:?}", data_dir);
-
-            // Write debug log
-            let log_path = data_dir.join("tauri-debug.log");
-            let clean_resource = clean_path(&resource_dir);
-            let clean_data = clean_path(&data_dir);
-            let web_path = clean_data.join("web");
-            let proxy_path = clean_resource.join("proxy.exe");
-            let log_content = format!(
-                "resource_dir (raw): {:?}\nresource_dir (clean): {:?}\ndata_dir: {:?}\nweb_dir: {:?}\nweb_dir exists: {}\nproxy.exe exists: {}\nindex.html exists: {}\n",
-                resource_dir, clean_resource, clean_data, web_path,
-                web_path.exists(), proxy_path.exists(), web_path.join("index.html").exists(),
-            );
-            std::fs::write(&log_path, &log_content).ok();
-            println!("[tauri] Debug log written to {:?}", log_path);
-
-            let config = get_app_config(&data_dir);
-            let photos_dir = resolved_local_photos_dir(&data_dir, &config);
-            std::fs::create_dir_all(&photos_dir).ok();
-            println!("[tauri] Photos dir: {:?}", photos_dir);
-            println!(
-                "[tauri] Backend mode: {}",
-                match config.active_backend_mode {
-                    BackendMode::Local => "local",
-                    BackendMode::Remote => "remote",
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                if let Err(error) = run_startup(app_handle.clone(), resource_dir, data_dir) {
+                    eprintln!("[tauri] Startup failed: {}", error);
+                    update_startup_progress(&app_handle, 100, &format!("Startup failed: {}", error));
                 }
-            );
-
-            // Clear out a proxy left behind by a prior crashed run before touching the web dir.
-            ensure_proxy_port_available(&data_dir, 3001)
-                .map_err(|message| io::Error::new(io::ErrorKind::AddrInUse, message))?;
-
-            // Extract web.zip and fail early if the runtime frontend is unavailable.
-            let web_dir = extract_web_zip(&resource_dir, &data_dir)
-                .map_err(|message| io::Error::new(io::ErrorKind::Other, message))?;
-            let post_extract_log = format!(
-                "{}post_extract_web_dir: {:?}\npost_extract_web_dir exists: {}\npost_extract_index.html exists: {}\n",
-                log_content,
-                web_dir,
-                web_dir.exists(),
-                web_dir.join("index.html").exists(),
-            );
-            std::fs::write(&log_path, post_extract_log).ok();
-
-            // Kill any stale lomod on port 8000 before starting a fresh one.
-            #[cfg(target_os = "windows")]
-            {
-                let _ = Command::new("taskkill").args(["/F", "/IM", "lomod.exe"]).output();
-                std::thread::sleep(std::time::Duration::from_millis(500));
-            }
-
-            // Start lomod only when the app is configured to use the bundled local backend.
-            let lomod = if config.active_backend_mode == BackendMode::Local {
-                start_lomod(&resource_dir, &data_dir, &photos_dir)
-            } else {
-                None
-            };
-
-            // Start proxy
-            let proxy = start_proxy(&resource_dir, &data_dir, &backend_url_from_config(&config))
-                .ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::AddrInUse,
-                        "Failed to start proxy on port 3001. Check proxy-err.log for details.",
-                    )
-                })?;
-
-            // Give the proxy a moment to start before WebView loads
-            std::thread::sleep(std::time::Duration::from_secs(2));
-
-            app.manage(Mutex::new(AppState {
-                lomod_process: lomod,
-                proxy_process: Some(proxy),
-                resource_dir: clean_path(&resource_dir),
-                data_dir: clean_path(&data_dir),
-            }));
-
-            // Keep release builds clean; only auto-open devtools for debug builds.
-            #[cfg(debug_assertions)]
-            if let Some(w) = app.get_webview_window("main") {
-                w.open_devtools();
-            }
+            });
 
             Ok(())
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
+                if window.label() != "main" {
+                    return;
+                }
                 if let Some(state) = window
                     .app_handle()
                     .try_state::<Mutex<AppState>>()
