@@ -1,7 +1,7 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::io::{self, Read as _};
 use std::net::TcpStream;
 #[cfg(target_os = "windows")]
@@ -66,6 +66,26 @@ struct AppState {
     data_dir: PathBuf,
 }
 
+#[derive(serde::Serialize, Clone)]
+struct LocalLibraryDbUser {
+    id: i64,
+    user_name: String,
+    email: String,
+    nick_name: String,
+    home_dir: String,
+    admin: bool,
+    status: i64,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct LocalLibraryDbCandidate {
+    path: String,
+    source: String,
+    users: Vec<LocalLibraryDbUser>,
+    user_count: usize,
+    load_error: Option<String>,
+}
+
 /// Strip the `\\?\` extended-length path prefix that Windows/Tauri adds.
 /// Node.js and some tools don't handle this prefix correctly.
 fn clean_path(p: &std::path::Path) -> PathBuf {
@@ -95,7 +115,10 @@ fn write_proxy_pid(data_dir: &std::path::Path, pid: u32) {
 
 #[cfg(target_os = "windows")]
 fn listening_pids_on_port(port: u16) -> Vec<u32> {
-    let Ok(output) = hidden_command("netstat").args(["-ano", "-p", "tcp"]).output() else {
+    let Ok(output) = hidden_command("netstat")
+        .args(["-ano", "-p", "tcp"])
+        .output()
+    else {
         return Vec::new();
     };
 
@@ -154,7 +177,9 @@ fn kill_stale_proxy(data_dir: &std::path::Path) {
     }
 
     println!("[tauri] Killing stale proxy (pid {})", pid);
-    let _ = hidden_command("taskkill").args(["/F", "/PID", pid]).output();
+    let _ = hidden_command("taskkill")
+        .args(["/F", "/PID", pid])
+        .output();
     clear_proxy_pid(data_dir);
     std::thread::sleep(std::time::Duration::from_millis(300));
 }
@@ -580,6 +605,29 @@ fn assets_db_path(data_dir: &std::path::Path) -> PathBuf {
     runtime_data_dir(data_dir).join("var").join("assets.db")
 }
 
+fn default_lomoware_assets_db_paths() -> Vec<PathBuf> {
+    let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") else {
+        return Vec::new();
+    };
+
+    let base = PathBuf::from(local_app_data);
+    [base.join("Lomoware"), base.join("lomoware")]
+        .into_iter()
+        .map(|path| clean_path(&path.join("var").join("assets.db")))
+        .filter(|path| path.is_file())
+        .collect()
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    let next = path_str(&path).to_lowercase();
+    if !paths
+        .iter()
+        .any(|existing| path_str(existing).to_lowercase() == next)
+    {
+        paths.push(path);
+    }
+}
+
 fn unique_runtime_data_backup_path(data_dir: &std::path::Path) -> PathBuf {
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -679,6 +727,219 @@ fn local_library_assets_db_paths(photos_dir: &std::path::Path) -> Vec<PathBuf> {
     matches.sort();
     matches.dedup();
     matches
+}
+
+fn local_library_db_paths(
+    data_dir: &std::path::Path,
+    photos_dir: &std::path::Path,
+) -> Vec<PathBuf> {
+    let mut matches = Vec::new();
+
+    for path in default_lomoware_assets_db_paths() {
+        push_unique_path(&mut matches, path);
+    }
+
+    let runtime_db_path = assets_db_path(data_dir);
+    if runtime_db_path.is_file() {
+        push_unique_path(&mut matches, clean_path(&runtime_db_path));
+    }
+
+    for path in local_library_assets_db_paths(photos_dir) {
+        push_unique_path(&mut matches, path);
+    }
+
+    matches
+}
+
+fn assets_db_source(
+    data_dir: &std::path::Path,
+    photos_dir: &std::path::Path,
+    db_path: &std::path::Path,
+) -> String {
+    let db = path_str(db_path).to_lowercase();
+
+    if default_lomoware_assets_db_paths()
+        .iter()
+        .any(|path| path_str(path).to_lowercase() == db)
+    {
+        return "Default Lomoware database".into();
+    }
+
+    if path_str(&assets_db_path(data_dir)).to_lowercase() == db {
+        return "Current runtime database".into();
+    }
+
+    let photos_prefix =
+        format!("{}\\", path_str(&clean_path(photos_dir)).replace('/', "\\")).to_lowercase();
+    if db.replace('/', "\\").starts_with(&photos_prefix) {
+        return "Selected folder database".into();
+    }
+
+    "Local database".into()
+}
+
+fn open_assets_db_at(db_path: &std::path::Path) -> Result<Connection, String> {
+    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("Failed to open {}: {}", db_path.display(), e))?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| format!("Failed to set SQLite timeout: {}", e))?;
+    Ok(conn)
+}
+
+fn local_library_db_users(db_path: &std::path::Path) -> Result<Vec<LocalLibraryDbUser>, String> {
+    if !db_path.is_file() {
+        return Err(format!("{} does not exist", db_path.display()));
+    }
+
+    let conn = open_assets_db_at(db_path)?;
+    let mut statement = conn
+        .prepare(
+            "SELECT id, user_name, email, nick_name, home_dir, admin, status
+             FROM user
+             WHERE TRIM(COALESCE(user_name, '')) <> ''
+               AND TRIM(COALESCE(home_dir, '')) <> ''
+             ORDER BY CASE WHEN admin <> 0 THEN 0 ELSE 1 END, user_name",
+        )
+        .map_err(|e| format!("Failed to read users from {}: {}", db_path.display(), e))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            let admin: i64 = row.get(5)?;
+            Ok(LocalLibraryDbUser {
+                id: row.get(0)?,
+                user_name: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                email: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                nick_name: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                home_dir: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                admin: admin != 0,
+                status: row.get(6)?,
+            })
+        })
+        .map_err(|e| format!("Failed to query users from {}: {}", db_path.display(), e))?;
+
+    let mut users = Vec::new();
+    for row in rows {
+        users.push(row.map_err(|e| format!("Failed to read a local user: {}", e))?);
+    }
+
+    Ok(users)
+}
+
+fn local_library_db_candidates(
+    data_dir: &std::path::Path,
+    photos_dir: &std::path::Path,
+) -> Vec<LocalLibraryDbCandidate> {
+    local_library_db_paths(data_dir, photos_dir)
+        .into_iter()
+        .map(|db_path| {
+            let source = assets_db_source(data_dir, photos_dir, &db_path);
+            match local_library_db_users(&db_path) {
+                Ok(users) => {
+                    let user_count = users.len();
+                    LocalLibraryDbCandidate {
+                        path: path_str(&db_path),
+                        source,
+                        users,
+                        user_count,
+                        load_error: None,
+                    }
+                }
+                Err(error) => LocalLibraryDbCandidate {
+                    path: path_str(&db_path),
+                    source,
+                    users: Vec::new(),
+                    user_count: 0,
+                    load_error: Some(error),
+                },
+            }
+        })
+        .collect()
+}
+
+fn selected_local_library_user(
+    db_path: &std::path::Path,
+    user_name: Option<&str>,
+) -> Result<LocalLibraryDbUser, String> {
+    let users = local_library_db_users(db_path)?;
+    if users.is_empty() {
+        return Err(format!(
+            "No local users were found in {}",
+            path_str(db_path)
+        ));
+    }
+
+    if let Some(user_name) = user_name.map(str::trim).filter(|value| !value.is_empty()) {
+        users
+            .into_iter()
+            .find(|user| user.user_name.eq_ignore_ascii_case(user_name))
+            .ok_or_else(|| {
+                format!(
+                    "User '{}' was not found in {}",
+                    user_name,
+                    path_str(db_path)
+                )
+            })
+    } else {
+        Ok(users[0].clone())
+    }
+}
+
+fn path_matches(a: &std::path::Path, b: &std::path::Path) -> bool {
+    path_str(a).to_lowercase() == path_str(b).to_lowercase()
+}
+
+fn sqlite_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn copy_assets_db_snapshot(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<(), String> {
+    if path_matches(source, target) {
+        return Ok(());
+    }
+
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("Invalid target database path: {}", target.display()))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("Failed to create {}: {}", parent.display(), e))?;
+
+    let tmp_target = target.with_extension("assets.db.tmp");
+    if tmp_target.exists() {
+        std::fs::remove_file(&tmp_target)
+            .map_err(|e| format!("Failed to remove stale {}: {}", tmp_target.display(), e))?;
+    }
+
+    let conn = open_assets_db_at(source)?;
+    conn.execute_batch(&format!(
+        "VACUUM INTO {};",
+        sqlite_string_literal(&path_str(&tmp_target))
+    ))
+    .map_err(|e| {
+        format!(
+            "Failed to copy {} to {}: {}",
+            source.display(),
+            tmp_target.display(),
+            e
+        )
+    })?;
+
+    if target.exists() {
+        std::fs::remove_file(target)
+            .map_err(|e| format!("Failed to replace {}: {}", target.display(), e))?;
+    }
+    std::fs::rename(&tmp_target, target).map_err(|e| {
+        format!(
+            "Failed to move {} to {}: {}",
+            tmp_target.display(),
+            target.display(),
+            e
+        )
+    })?;
+
+    Ok(())
 }
 
 fn load_config(data_dir: &std::path::Path) -> Option<AppConfig> {
@@ -1221,8 +1482,7 @@ fn hash_password_for_lomo(password: &str, username: &str) -> Result<String, Stri
     use base64::{engine::general_purpose::STANDARD, Engine as _};
 
     let salt = format!("{}@lomorage.lomoware", username);
-    let params = Params::new(4096, 3, 1, Some(32))
-        .map_err(|e| format!("argon2 params: {}", e))?;
+    let params = Params::new(4096, 3, 1, Some(32)).map_err(|e| format!("argon2 params: {}", e))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
     let mut hash = [0u8; 32];
@@ -1345,19 +1605,32 @@ fn pick_folder() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn inspect_local_library_folder(photos_dir: String) -> Result<serde_json::Value, String> {
+fn inspect_local_library_folder(
+    state: tauri::State<'_, Mutex<AppState>>,
+    photos_dir: String,
+) -> Result<serde_json::Value, String> {
+    let state = state.lock().map_err(|e| e.to_string())?;
     let trimmed = photos_dir.trim();
     let photos_path = PathBuf::from(trimmed);
-    let matches = if trimmed.is_empty() {
+    let folder_matches = if trimmed.is_empty() {
         Vec::new()
     } else {
         local_library_assets_db_paths(&photos_path)
     };
+    let db_candidates = if trimmed.is_empty() {
+        local_library_db_candidates(&state.data_dir, &default_photos_dir(&state.data_dir))
+    } else {
+        local_library_db_candidates(&state.data_dir, &photos_path)
+    };
+    let has_existing_user_db = db_candidates
+        .iter()
+        .any(|candidate| candidate.user_count > 0);
 
     Ok(serde_json::json!({
         "photos_dir": if trimmed.is_empty() { String::new() } else { path_str(&photos_path) },
-        "has_existing_user_db": !matches.is_empty(),
-        "existing_assets_db_paths": matches.iter().map(|path| path_str(path)).collect::<Vec<_>>(),
+        "has_existing_user_db": has_existing_user_db,
+        "existing_assets_db_paths": folder_matches.iter().map(|path| path_str(path)).collect::<Vec<_>>(),
+        "existing_library_databases": db_candidates,
     }))
 }
 
@@ -1440,6 +1713,8 @@ fn complete_initial_setup(
 fn use_existing_local_library(
     state: tauri::State<'_, Mutex<AppState>>,
     photos_dir: String,
+    db_path: Option<String>,
+    user_name: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let mut state = state.lock().map_err(|e| e.to_string())?;
     let data_dir = state.data_dir.clone();
@@ -1453,21 +1728,84 @@ fn use_existing_local_library(
     }
 
     let photos_path = PathBuf::from(next_dir);
-    let existing_library_db_paths = local_library_assets_db_paths(&photos_path);
-    if existing_library_db_paths.is_empty() {
-        return Err("No existing assets.db files were found in the selected folder".into());
+    let candidate_paths = local_library_db_paths(&data_dir, &photos_path);
+    if candidate_paths.is_empty() {
+        return Err("No existing assets.db files were found".into());
+    }
+
+    let selected_db_path = match db_path
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => {
+            let requested = clean_path(&PathBuf::from(value));
+            candidate_paths
+                .iter()
+                .find(|path| path_matches(path, &requested))
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "Selected database is not one of the detected local libraries: {}",
+                        value
+                    )
+                })?
+        }
+        None => candidate_paths
+            .iter()
+            .find(|path| !local_library_db_users(path).unwrap_or_default().is_empty())
+            .cloned()
+            .ok_or_else(|| "No local users were found in detected assets.db files".to_string())?,
+    };
+
+    let selected_user = selected_local_library_user(&selected_db_path, user_name.as_deref())?;
+    let selected_photos_path =
+        photos_dir_from_home_dir(&selected_user.home_dir).unwrap_or(photos_path);
+
+    let runtime_db_path = assets_db_path(&data_dir);
+    let selected_is_runtime_db = path_matches(&selected_db_path, &runtime_db_path);
+
+    kill_lomod(&mut state);
+
+    let backup_dir = if selected_is_runtime_db {
+        None
+    } else {
+        match backup_runtime_data_dir(&data_dir) {
+            Ok(backup_dir) => backup_dir,
+            Err(error) => {
+                if previous_config.active_backend_mode == BackendMode::Local {
+                    state.lomod_process =
+                        start_lomod(&resource_dir, &data_dir, &previous_photos_dir);
+                }
+                return Err(error);
+            }
+        }
+    };
+
+    if let Err(error) = copy_assets_db_snapshot(&selected_db_path, &runtime_db_path) {
+        restore_runtime_data_dir(&data_dir, backup_dir.as_deref()).ok();
+        if previous_config.active_backend_mode == BackendMode::Local {
+            state.lomod_process = start_lomod(&resource_dir, &data_dir, &previous_photos_dir);
+        }
+        return Err(error);
     }
 
     let mut config = previous_config.clone();
     config.active_backend_mode = BackendMode::Local;
-    config.local.photos_dir = path_str(&photos_path);
-    config.local.setup_completed = false;
+    config.local.photos_dir = path_str(&selected_photos_path);
+    config.local.setup_completed = true;
 
-    save_config(&data_dir, &config)?;
+    if let Err(error) = save_config(&data_dir, &config) {
+        restore_runtime_data_dir(&data_dir, backup_dir.as_deref()).ok();
+        if previous_config.active_backend_mode == BackendMode::Local {
+            state.lomod_process = start_lomod(&resource_dir, &data_dir, &previous_photos_dir);
+        }
+        return Err(error);
+    }
 
-    kill_lomod(&mut state);
-    state.lomod_process = start_lomod(&resource_dir, &data_dir, &photos_path);
+    state.lomod_process = start_lomod(&resource_dir, &data_dir, &selected_photos_path);
     if state.lomod_process.is_none() {
+        restore_runtime_data_dir(&data_dir, backup_dir.as_deref()).ok();
         save_config(&data_dir, &previous_config).ok();
         if previous_config.active_backend_mode == BackendMode::Local {
             state.lomod_process = start_lomod(&resource_dir, &data_dir, &previous_photos_dir);
@@ -1477,6 +1815,7 @@ fn use_existing_local_library(
 
     if !wait_for_local_users(&data_dir, 24, 250) {
         kill_lomod(&mut state);
+        restore_runtime_data_dir(&data_dir, backup_dir.as_deref()).ok();
         save_config(&data_dir, &previous_config).ok();
         if previous_config.active_backend_mode == BackendMode::Local {
             state.lomod_process = start_lomod(&resource_dir, &data_dir, &previous_photos_dir);
@@ -1487,19 +1826,29 @@ fn use_existing_local_library(
         );
     }
 
-    if let Ok(Some(runtime_dir)) = runtime_local_photos_dir(&data_dir) {
-        config.local.photos_dir = path_str(&runtime_dir);
-    }
-    config.local.setup_completed = true;
     save_config(&data_dir, &config)?;
     restart_proxy(&mut state, &backend_url_from_config(&config));
 
     println!(
-        "[tauri] Existing local library loaded: photos_dir={}",
+        "[tauri] Existing local library loaded: db={} user={} photos_dir={}",
+        path_str(&selected_db_path),
+        selected_user.user_name,
         config.local.photos_dir
     );
 
-    Ok(app_settings_json(&data_dir))
+    let mut settings = app_settings_json(&data_dir);
+    if let Some(object) = settings.as_object_mut() {
+        object.insert(
+            "selected_local_user".into(),
+            serde_json::json!({
+                "user_name": selected_user.user_name,
+                "home_dir": selected_user.home_dir,
+                "db_path": path_str(&selected_db_path),
+            }),
+        );
+    }
+
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -1707,7 +2056,11 @@ fn main() {
             std::thread::spawn(move || {
                 if let Err(error) = run_startup(app_handle.clone(), resource_dir, data_dir) {
                     eprintln!("[tauri] Startup failed: {}", error);
-                    update_startup_progress(&app_handle, 100, &format!("Startup failed: {}", error));
+                    update_startup_progress(
+                        &app_handle,
+                        100,
+                        &format!("Startup failed: {}", error),
+                    );
                 }
             });
 
@@ -1718,10 +2071,7 @@ fn main() {
                 if window.label() != "main" {
                     return;
                 }
-                if let Some(state) = window
-                    .app_handle()
-                    .try_state::<Mutex<AppState>>()
-                {
+                if let Some(state) = window.app_handle().try_state::<Mutex<AppState>>() {
                     let mut state = state.lock().unwrap();
                     kill_processes(&mut state);
                 }
