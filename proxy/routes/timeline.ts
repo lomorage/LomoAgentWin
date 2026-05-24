@@ -50,6 +50,20 @@ interface LomoMonthDetail {
   Month: number;
 }
 
+type TimelineBucket = {
+  timeBucket: string;
+  count: number;
+};
+
+class UpstreamHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 function isImageExt(name: string): boolean {
   const ext = name.split('.').pop()?.toLowerCase() || '';
   return ['jpg', 'jpeg', 'png', 'heic', 'heif', 'webp', 'gif', 'bmp', 'tiff', 'dng', 'raw'].includes(ext);
@@ -66,9 +80,128 @@ const albumBucketCache = new Map<string, {
   timestamp: number;
 }>();
 const ALBUM_CACHE_TTL = 60_000; // 60 seconds
+const TIMELINE_BUCKET_CACHE_TTL = 60_000; // 60 seconds
+const timelineBucketCache = new Map<string, {
+  data: TimelineBucket[];
+  timestamp: number;
+}>();
+const timelineBucketInflight = new Map<string, Promise<TimelineBucket[]>>();
+let timelineBucketCacheGeneration = 0;
 
 export function clearAlbumBucketCache() {
   albumBucketCache.clear();
+  timelineBucketCache.clear();
+  timelineBucketInflight.clear();
+  timelineBucketCacheGeneration += 1;
+}
+
+function getTimelineBucketCacheKey(
+  serverUrl: string,
+  token: string,
+  userId: string,
+  favoriteFilter: boolean | undefined,
+): string {
+  return [serverUrl, token, userId, favoriteFilter === undefined ? 'all' : String(favoriteFilter)].join('\0');
+}
+
+async function fetchTimelineBuckets(
+  serverUrl: string,
+  token: string,
+  favoriteFilter: boolean | undefined,
+): Promise<TimelineBucket[]> {
+  const lomoRes = await fetch(`${serverUrl}/assets/merkletree?token=${token}`);
+  if (!lomoRes.ok) {
+    console.error(`[timeline] merkletree failed: ${lomoRes.status}`);
+    throw new UpstreamHttpError(lomoRes.status, 'Failed to fetch assets');
+  }
+
+  const data = await lomoRes.json() as LomoYearList;
+  const years = data.Years || [];
+  console.log(`[timeline] merkletree from ${serverUrl}: years=${years.length}`);
+
+  // Collect all year/month pairs from the root tree
+  const monthEntries: Array<{ year: number; month: number; days: LomoDay[] }> = [];
+  for (const year of years) {
+    for (const month of year.Months || []) {
+      monthEntries.push({ year: year.Year, month: month.Month, days: month.Days || [] });
+    }
+  }
+
+  // If the root tree doesn't include day/asset data (Days empty), fetch each month detail
+  const rootHasAssets = monthEntries.some((m) => m.days.length > 0);
+  if (!rootHasAssets && monthEntries.length > 0) {
+    console.log(`[timeline] root tree has no day detail, fetching ${monthEntries.length} month(s) individually`);
+    await Promise.all(
+      monthEntries.map(async (entry) => {
+        try {
+          const res = await fetch(
+            `${serverUrl}/assets/merkletree/${entry.year}/${entry.month}?token=${token}`,
+          );
+          if (res.ok) {
+            const monthData = await res.json() as LomoMonthDetail;
+            entry.days = monthData.Days || [];
+          }
+        } catch {
+          // leave days empty for this month
+        }
+      }),
+    );
+  }
+
+  const buckets: TimelineBucket[] = [];
+  for (const entry of monthEntries) {
+    let count = 0;
+    for (const day of entry.days) {
+      for (const asset of day.Assets || []) {
+        if (favoriteFilter === undefined || isFavoriteStatus(asset.Status) === favoriteFilter) {
+          count += 1;
+        }
+      }
+    }
+    if (count > 0) {
+      const mm = String(entry.month).padStart(2, '0');
+      buckets.push({ timeBucket: `${entry.year}-${mm}-01T00:00:00.000Z`, count });
+    }
+  }
+
+  // Sort descending (newest first) — Immich default
+  buckets.sort((a, b) => b.timeBucket.localeCompare(a.timeBucket));
+  console.log(`[timeline] returning ${buckets.length} buckets`);
+
+  return buckets;
+}
+
+async function getCachedTimelineBuckets(
+  serverUrl: string,
+  token: string,
+  userId: string,
+  favoriteFilter: boolean | undefined,
+): Promise<TimelineBucket[]> {
+  const cacheKey = getTimelineBucketCacheKey(serverUrl, token, userId, favoriteFilter);
+  const cached = timelineBucketCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < TIMELINE_BUCKET_CACHE_TTL) {
+    return cached.data;
+  }
+
+  const existing = timelineBucketInflight.get(cacheKey);
+  if (existing) {
+    return existing;
+  }
+
+  const generation = timelineBucketCacheGeneration;
+  const pending = fetchTimelineBuckets(serverUrl, token, favoriteFilter)
+    .then((buckets) => {
+      if (generation === timelineBucketCacheGeneration) {
+        timelineBucketCache.set(cacheKey, { data: buckets, timestamp: Date.now() });
+      }
+      return buckets;
+    })
+    .finally(() => {
+      timelineBucketInflight.delete(cacheKey);
+    });
+
+  timelineBucketInflight.set(cacheKey, pending);
+  return pending;
 }
 
 /**
@@ -150,68 +283,14 @@ timelineRouter.get('/buckets', async (req, res) => {
       return res.json(buckets);
     }
 
-    // Default: full merkletree
-    const lomoRes = await fetch(`${auth.serverUrl}/assets/merkletree?token=${auth.token}`);
-    if (!lomoRes.ok) {
-      console.error(`[timeline] merkletree failed: ${lomoRes.status}`);
-      return res.status(lomoRes.status).json({ message: 'Failed to fetch assets' });
-    }
-
-    const data = await lomoRes.json() as LomoYearList;
-    const years = data.Years || [];
-    console.log(`[timeline] merkletree from ${auth.serverUrl}: years=${years.length}`);
-
-    // Collect all year/month pairs from the root tree
-    const monthEntries: Array<{ year: number; month: number; days: LomoDay[] }> = [];
-    for (const year of years) {
-      for (const month of year.Months || []) {
-        monthEntries.push({ year: year.Year, month: month.Month, days: month.Days || [] });
-      }
-    }
-
-    // If the root tree doesn't include day/asset data (Days empty), fetch each month detail
-    const rootHasAssets = monthEntries.some((m) => m.days.length > 0);
-    if (!rootHasAssets && monthEntries.length > 0) {
-      console.log(`[timeline] root tree has no day detail, fetching ${monthEntries.length} month(s) individually`);
-      await Promise.all(
-        monthEntries.map(async (entry) => {
-          try {
-            const res = await fetch(
-              `${auth.serverUrl}/assets/merkletree/${entry.year}/${entry.month}?token=${auth.token}`,
-            );
-            if (res.ok) {
-              const monthData = await res.json() as LomoMonthDetail;
-              entry.days = monthData.Days || [];
-            }
-          } catch {
-            // leave days empty for this month
-          }
-        }),
-      );
-    }
-
-    const buckets: Array<{ timeBucket: string; count: number }> = [];
-    for (const entry of monthEntries) {
-      let count = 0;
-      for (const day of entry.days) {
-        for (const asset of day.Assets || []) {
-          if (favoriteFilter === undefined || isFavoriteStatus(asset.Status) === favoriteFilter) {
-            count += 1;
-          }
-        }
-      }
-      if (count > 0) {
-        const mm = String(entry.month).padStart(2, '0');
-        buckets.push({ timeBucket: `${entry.year}-${mm}-01T00:00:00.000Z`, count });
-      }
-    }
-
-    // Sort descending (newest first) — Immich default
-    buckets.sort((a, b) => b.timeBucket.localeCompare(a.timeBucket));
-    console.log(`[timeline] returning ${buckets.length} buckets`);
-
+    // Default: full merkletree buckets are expensive on lomod, so cache briefly.
+    const buckets = await getCachedTimelineBuckets(auth.serverUrl, auth.token, auth.userId, favoriteFilter);
     res.json(buckets);
   } catch (error) {
+    if (error instanceof UpstreamHttpError) {
+      return res.status(error.status).json({ message: error.message });
+    }
+
     console.error('[timeline] buckets error:', error);
     res.status(500).json({ message: 'Internal error' });
   }
