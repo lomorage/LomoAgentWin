@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicktomlin/tauri/refs/heads/dev/.schema/config.schema.json",
-  "productName": "LomoPhotoViewer",
+  "productName": "lomorage",
   "version": "1.0.6",
   "identifier": "com.lomoware.photoviewer",
   "build": {
@@ -10,7 +10,7 @@
   "app": {
     "windows": [
       {
-        "title": "Lomo Photo Viewer",
+        "title": "lomorage",
         "width": 1280,
         "height": 800,
         "visible": false,

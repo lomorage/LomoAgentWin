@@ -282,7 +282,7 @@ fn startup_html() -> &'static str {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Starting Lomo Photo Viewer</title>
+    <title>Starting lomorage</title>
     <style>
       :root {
         color: #242137;
@@ -351,7 +351,7 @@ fn startup_html() -> &'static str {
   </head>
   <body>
     <main class="card">
-      <div class="brand">Lomo Photo Viewer</div>
+      <div class="brand">lomorage</div>
       <div class="title">Starting your photo library</div>
       <div id="message" class="message">Preparing app data</div>
       <div class="track"><div id="bar" class="bar"></div></div>
@@ -379,7 +379,7 @@ fn create_startup_window(app: &tauri::App) -> Option<tauri::WebviewWindow> {
         "startup",
         tauri::WebviewUrl::External(url.parse().ok()?),
     )
-    .title("Starting Lomo Photo Viewer")
+    .title("Starting lomorage")
     .inner_size(520.0, 360.0)
     .resizable(false)
     .decorations(false)
