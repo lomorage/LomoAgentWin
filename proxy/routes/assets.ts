@@ -61,8 +61,10 @@ async function sharpFallbackThumbnail(
 
   // Resize with sharp
   const s = getSharp();
+  const resizeWidth = width > 0 ? width : undefined;
+  const resizeHeight = height > 0 ? height : undefined;
   return s(jpegBuf)
-    .resize(width, height, { fit: 'inside', withoutEnlargement: true })
+    .resize(resizeWidth, resizeHeight, { fit: 'inside', withoutEnlargement: true })
     .jpeg({ quality: 80 })
     .toBuffer();
 }
@@ -268,10 +270,10 @@ assetsRouter.get('/:id/thumbnail', async (req, res) => {
 
   // Map Immich sizes to lomo preview dimensions
   let width = 250;
-  let height = 250;
+  let height = 0;
   if (size === 'preview') {
     width = 1080;
-    height = 1080;
+    height = 0;
   }
 
   try {
@@ -406,7 +408,7 @@ assetsRouter.get('/:id', async (req, res) => {
       const result = await probe(previewUrl);
       width = result.width;
       height = result.height;
-      cacheDimensions(meta.Name, width, height);
+      cacheDimensions(meta.Name, width, height, auth.token, auth.serverUrl);
     } catch {
       // Fallback: fetch original and use sharp for dimensions (handles HEIC, etc.)
       try {
@@ -417,7 +419,7 @@ assetsRouter.get('/:id', async (req, res) => {
         const metadata = await s(buf).metadata();
           width = metadata.width || null;
           height = metadata.height || null;
-          if (width && height) cacheDimensions(meta.Name, width, height);
+          if (width && height) cacheDimensions(meta.Name, width, height, auth.token, auth.serverUrl);
           console.log(`[assets] sharp metadata fallback for ${meta.Name}: ${width}x${height}`);
         }
       } catch (e2) {

@@ -1,7 +1,12 @@
 import probe from 'probe-image-size';
 
-// In-memory cache: assetName -> { width, height }
+// In-memory cache scoped by backend/session so same-named files in different libraries
+// do not reuse each other's aspect ratio.
 const cache = new Map<string, { width: number; height: number }>();
+
+function cacheKey(serverUrl: string, token: string, assetName: string): string {
+  return `${serverUrl}\0${token}\0${assetName}`;
+}
 
 /**
  * Get image dimensions for a single asset.
@@ -12,7 +17,8 @@ export async function getAssetDimensions(
   token: string,
   serverUrl: string,
 ): Promise<{ width: number; height: number } | null> {
-  const cached = cache.get(assetName);
+  const key = cacheKey(serverUrl, token, assetName);
+  const cached = cache.get(key);
   if (cached) {
     return cached;
   }
@@ -22,7 +28,7 @@ export async function getAssetDimensions(
     const url = `${serverUrl}/asset/preview/${encodeURIComponent(assetName)}?token=${token}&width=75&height=0`;
     const result = await probe(url);
     const dims = { width: result.width, height: result.height };
-    cache.set(assetName, dims);
+    cache.set(key, dims);
     return dims;
   } catch {
     return null;
@@ -63,6 +69,6 @@ export async function getAssetRatios(
 /**
  * Store dimensions in cache (e.g., from a larger preview probe).
  */
-export function cacheDimensions(assetName: string, width: number, height: number) {
-  cache.set(assetName, { width, height });
+export function cacheDimensions(assetName: string, width: number, height: number, token: string, serverUrl: string) {
+  cache.set(cacheKey(serverUrl, token, assetName), { width, height });
 }
