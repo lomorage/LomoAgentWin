@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Default capabilities for the app",
-  "windows": ["main"],
+  "windows": ["main", "welcome"],
   "permissions": [
     "core:default"
   ],

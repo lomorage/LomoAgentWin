@@ -51,6 +51,8 @@ struct AppConfig {
     #[serde(default)]
     remote: RemoteBackendConfig,
     #[serde(default)]
+    welcome_shown: bool,
+    #[serde(default)]
     #[serde(skip_serializing)]
     photos_dir: String,
     #[serde(default)]
@@ -514,10 +516,21 @@ fn run_startup(
 
     update_startup_progress(&app, 96, "Opening viewer");
     if let Some(main) = app.get_webview_window("main") {
-        let viewer_url = "http://localhost:3001"
+        // On first ever launch, show the welcome wizard inside the main window.
+        let mut config = get_app_config(&data_dir);
+        let start_url = if !config.welcome_shown {
+            config.welcome_shown = true;
+            if let Err(e) = save_config(&data_dir, &config) {
+                eprintln!("[tauri] Failed to save welcome_shown: {}", e);
+            }
+            "http://localhost:3001/lomo-welcome"
+        } else {
+            "http://localhost:3001"
+        };
+        let parsed_url = start_url
             .parse()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-        let _ = main.navigate(viewer_url);
+        let _ = main.navigate(parsed_url);
         let _ = main.show();
         let _ = main.set_focus();
 
@@ -572,6 +585,7 @@ fn parse_backend_mode(value: &str) -> Result<BackendMode, String> {
 fn config_path(data_dir: &std::path::Path) -> PathBuf {
     data_dir.join("config.json")
 }
+
 
 fn normalize_config(mut config: AppConfig, data_dir: &std::path::Path) -> AppConfig {
     if let Some(mode) = config.backend_mode {
@@ -1067,6 +1081,7 @@ fn app_settings_json(data_dir: &std::path::Path) -> serde_json::Value {
         "photos_dir": resolved_photos_dir,
         "setup_completed": local_setup_completed,
         "needs_local_setup": needs_local_setup,
+        "welcome_shown": config.welcome_shown,
         "remote_lomod_url": config.remote.default_url.clone(),
         "local": {
             "photos_dir": resolved_photos_dir,
@@ -1497,6 +1512,7 @@ fn create_tray_icon(app: &mut tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+
 /// Make a simple HTTP POST request using raw TCP (no external deps).
 fn http_post(host: &str, port: u16, path: &str, body: &str) -> io::Result<u16> {
     use std::io::Write;
@@ -1622,6 +1638,21 @@ fn get_initial_setup_state(
 ) -> Result<serde_json::Value, String> {
     let state = state.lock().map_err(|e| e.to_string())?;
     Ok(app_settings_json(&state.data_dir))
+}
+
+#[tauri::command]
+fn show_welcome_page(app: tauri::AppHandle) -> Result<(), String> {
+    // Navigate the main window to the welcome wizard (served by the proxy).
+    // Works in both Tauri and plain-browser contexts — no separate popup.
+    if let Some(main) = app.get_webview_window("main") {
+        let url = "http://localhost:3001/lomo-welcome"
+            .parse::<tauri::Url>()
+            .map_err(|e| e.to_string())?;
+        let _ = main.navigate(url);
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -2087,6 +2118,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_app_settings,
             get_initial_setup_state,
+            show_welcome_page,
             save_backend_preference,
             pick_folder,
             inspect_local_library_folder,

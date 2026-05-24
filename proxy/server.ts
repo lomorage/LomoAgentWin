@@ -9,6 +9,7 @@ import { timelineRouter } from './routes/timeline';
 import { assetsRouter } from './routes/assets';
 import { albumsRouter } from './routes/albums';
 import { stubsRouter } from './routes/stubs';
+import { WELCOME_HTML } from './welcome-page';
 
 const app = express();
 const httpServer = http.createServer(app);
@@ -116,6 +117,12 @@ app.use('/api', stubsRouter);
 app.all('/api/*', (req, res) => {
   console.log(`[proxy] UNHANDLED: ${req.method} ${req.path}`);
   res.status(200).json({});
+});
+
+// Welcome wizard — served before static files so the SPA fallback doesn't swallow it
+app.get('/lomo-welcome', (_req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(WELCOME_HTML);
 });
 
 // Serve static Immich web build
