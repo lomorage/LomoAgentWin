@@ -10,10 +10,15 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+const TRAY_SHOW_APP_ID: &str = "tray-show-app";
+const TRAY_QUIT_ID: &str = "tray-quit";
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -1439,6 +1444,59 @@ fn restart_proxy(state: &mut AppState, backend_url: &str) {
     std::thread::sleep(std::time::Duration::from_millis(500));
 }
 
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+}
+
+fn confirm_quit() -> bool {
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("Quit lomorage?")
+        .set_description("This will stop the local photo viewer service and backend.")
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        == rfd::MessageDialogResult::Yes
+}
+
+fn quit_from_tray(app: &tauri::AppHandle) {
+    if !confirm_quit() {
+        return;
+    }
+
+    if let Some(state) = app.try_state::<Mutex<AppState>>() {
+        let mut state = state.lock().unwrap();
+        kill_processes(&mut state);
+    }
+
+    app.exit(0);
+}
+
+fn create_tray_icon(app: &mut tauri::App) -> tauri::Result<()> {
+    let show_app = MenuItem::with_id(app, TRAY_SHOW_APP_ID, "Show App", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show_app, &quit])?;
+
+    let mut tray_builder = TrayIconBuilder::with_id("main-tray")
+        .menu(&menu)
+        .tooltip("lomorage")
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            TRAY_SHOW_APP_ID => show_main_window(app),
+            TRAY_QUIT_ID => quit_from_tray(app),
+            _ => {}
+        });
+
+    if let Some(icon) = app.default_window_icon().cloned() {
+        tray_builder = tray_builder.icon(icon);
+    }
+
+    tray_builder.build(app)?;
+    Ok(())
+}
+
 /// Make a simple HTTP POST request using raw TCP (no external deps).
 fn http_post(host: &str, port: u16, path: &str, body: &str) -> io::Result<u16> {
     use std::io::Write;
@@ -2047,6 +2105,8 @@ fn main() {
                 .app_data_dir()
                 .expect("Failed to get app data dir");
 
+            create_tray_icon(app)?;
+
             if let Some(main) = app.get_webview_window("main") {
                 let _ = main.hide();
             }
@@ -2067,14 +2127,22 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                if window.label() != "main" {
-                    return;
+            if window.label() != "main" {
+                return;
+            }
+
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
                 }
-                if let Some(state) = window.app_handle().try_state::<Mutex<AppState>>() {
-                    let mut state = state.lock().unwrap();
-                    kill_processes(&mut state);
+                tauri::WindowEvent::Destroyed => {
+                    if let Some(state) = window.app_handle().try_state::<Mutex<AppState>>() {
+                        let mut state = state.lock().unwrap();
+                        kill_processes(&mut state);
+                    }
                 }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())
