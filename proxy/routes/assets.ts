@@ -1,4 +1,6 @@
 import { createHash } from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { Router } from 'express';
 import multer from 'multer';
 import fetch from 'node-fetch';
@@ -71,6 +73,170 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 export const assetsRouter = Router();
 
+type ThumbnailResult = {
+  buffer: Buffer;
+  contentType: string;
+};
+
+type ThumbnailCacheMeta = {
+  contentType: string;
+  createdAt: string;
+};
+
+const THUMBNAIL_CACHE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+const THUMBNAIL_FETCH_CONCURRENCY = Number(process.env.THUMBNAIL_FETCH_CONCURRENCY || 6);
+const thumbnailInflight = new Map<string, Promise<ThumbnailResult>>();
+
+class AsyncLimiter {
+  private active = 0;
+  private readonly queue: Array<() => void> = [];
+
+  constructor(private readonly limit: number) {}
+
+  async run<T>(task: () => Promise<T>): Promise<T> {
+    if (this.active >= this.limit) {
+      await new Promise<void>((resolve) => this.queue.push(resolve));
+    }
+
+    this.active += 1;
+    try {
+      return await task();
+    } finally {
+      this.active -= 1;
+      this.queue.shift()?.();
+    }
+  }
+}
+
+const thumbnailFetchLimiter = new AsyncLimiter(Math.max(1, THUMBNAIL_FETCH_CONCURRENCY));
+
+function getThumbnailCacheDir(): string {
+  const configDir = process.env.CONFIG_PATH ? path.dirname(process.env.CONFIG_PATH) : process.cwd();
+  return path.join(configDir, 'thumbnail-cache');
+}
+
+function thumbnailCacheKey(serverUrl: string, assetName: string, width: number, height: number, size: string): string {
+  return createHash('sha1').update(`${serverUrl}\0${assetName}\0${width}\0${height}\0${size}`).digest('hex');
+}
+
+function thumbnailCachePaths(cacheKey: string): { dataPath: string; metaPath: string } {
+  const cacheDir = getThumbnailCacheDir();
+  return {
+    dataPath: path.join(cacheDir, `${cacheKey}.bin`),
+    metaPath: path.join(cacheDir, `${cacheKey}.json`),
+  };
+}
+
+async function readThumbnailCache(cacheKey: string): Promise<ThumbnailResult | null> {
+  const { dataPath, metaPath } = thumbnailCachePaths(cacheKey);
+  try {
+    const [data, metaRaw] = await Promise.all([
+      fs.promises.readFile(dataPath),
+      fs.promises.readFile(metaPath, 'utf-8'),
+    ]);
+    const meta = JSON.parse(metaRaw) as ThumbnailCacheMeta;
+    const createdAt = Date.parse(meta.createdAt);
+    if (!meta.contentType || !Number.isFinite(createdAt)) {
+      return null;
+    }
+
+    if (Date.now() - createdAt > THUMBNAIL_CACHE_MAX_AGE_SECONDS * 1000) {
+      await Promise.all([
+        fs.promises.rm(dataPath, { force: true }),
+        fs.promises.rm(metaPath, { force: true }),
+      ]);
+      return null;
+    }
+
+    return { buffer: data, contentType: meta.contentType };
+  } catch {
+    return null;
+  }
+}
+
+async function writeThumbnailCache(cacheKey: string, result: ThumbnailResult): Promise<void> {
+  const cacheDir = getThumbnailCacheDir();
+  const { dataPath, metaPath } = thumbnailCachePaths(cacheKey);
+  const tmpDataPath = `${dataPath}.${process.pid}.${Date.now()}.tmp`;
+  const tmpMetaPath = `${metaPath}.${process.pid}.${Date.now()}.tmp`;
+
+  await fs.promises.mkdir(cacheDir, { recursive: true });
+  await fs.promises.writeFile(tmpDataPath, result.buffer);
+  await fs.promises.writeFile(
+    tmpMetaPath,
+    JSON.stringify({ contentType: result.contentType, createdAt: new Date().toISOString() } satisfies ThumbnailCacheMeta),
+  );
+  await fs.promises.rm(dataPath, { force: true });
+  await fs.promises.rm(metaPath, { force: true });
+  await fs.promises.rename(tmpDataPath, dataPath);
+  await fs.promises.rename(tmpMetaPath, metaPath);
+}
+
+async function fetchThumbnailFromLomo(
+  serverUrl: string,
+  token: string,
+  assetName: string,
+  width: number,
+  height: number,
+): Promise<ThumbnailResult> {
+  const lomoRes = await fetch(
+    `${serverUrl}/asset/preview/${encodeURIComponent(assetName)}?token=${token}&width=${width}&height=${height}`,
+  );
+
+  if (lomoRes.ok) {
+    const contentType = lomoRes.headers.get('content-type') || 'image/jpeg';
+    return {
+      buffer: Buffer.from(await lomoRes.arrayBuffer()),
+      contentType,
+    };
+  }
+
+  // Fallback: convert original with sharp (handles HEIC, etc.)
+  console.log(`[assets] sharp fallback for thumbnail ${assetName}`);
+  const buffer = await sharpFallbackThumbnail(serverUrl, token, assetName, width, height);
+  return { buffer, contentType: 'image/jpeg' };
+}
+
+async function getCachedThumbnail(
+  serverUrl: string,
+  token: string,
+  assetName: string,
+  width: number,
+  height: number,
+  size: string,
+): Promise<ThumbnailResult> {
+  const cacheKey = thumbnailCacheKey(serverUrl, assetName, width, height, size);
+  const cached = await readThumbnailCache(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const existing = thumbnailInflight.get(cacheKey);
+  if (existing) {
+    return existing;
+  }
+
+  const pending = thumbnailFetchLimiter
+    .run(async () => {
+      const cachedAfterQueue = await readThumbnailCache(cacheKey);
+      if (cachedAfterQueue) {
+        return cachedAfterQueue;
+      }
+
+      const result = await fetchThumbnailFromLomo(serverUrl, token, assetName, width, height);
+      await writeThumbnailCache(cacheKey, result).catch((error) => {
+        console.warn(`[assets] thumbnail cache write failed for ${assetName}:`, error);
+      });
+      return result;
+    })
+    .finally(() => {
+      thumbnailInflight.delete(cacheKey);
+    });
+
+  thumbnailInflight.set(cacheKey, pending);
+  return pending;
+}
+
 function getMimeType(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase() || '';
   const mimeMap: Record<string, string> = {
@@ -109,27 +275,11 @@ assetsRouter.get('/:id/thumbnail', async (req, res) => {
   }
 
   try {
-    const lomoRes = await fetch(
-      `${auth.serverUrl}/asset/preview/${encodeURIComponent(assetName)}?token=${auth.token}&width=${width}&height=${height}`
-    );
-
-    if (lomoRes.ok) {
-      const contentType = lomoRes.headers.get('content-type');
-      if (contentType) res.setHeader('Content-Type', contentType);
-      const contentLength = lomoRes.headers.get('content-length');
-      if (contentLength) res.setHeader('Content-Length', contentLength);
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      lomoRes.body?.pipe(res);
-      return;
-    }
-
-    // Fallback: convert original with sharp (handles HEIC, etc.)
-    console.log(`[assets] sharp fallback for thumbnail ${assetName}`);
-    const jpegBuf = await sharpFallbackThumbnail(auth.serverUrl, auth.token, assetName, width, height);
-    res.setHeader('Content-Type', 'image/jpeg');
-    res.setHeader('Content-Length', jpegBuf.length);
-    res.setHeader('Cache-Control', 'public, max-age=86400');
-    res.end(jpegBuf);
+    const thumbnail = await getCachedThumbnail(auth.serverUrl, auth.token, assetName, width, height, size || 'thumbnail');
+    res.setHeader('Content-Type', thumbnail.contentType);
+    res.setHeader('Content-Length', thumbnail.buffer.length);
+    res.setHeader('Cache-Control', `public, max-age=${THUMBNAIL_CACHE_MAX_AGE_SECONDS}, immutable`);
+    res.end(thumbnail.buffer);
   } catch (error) {
     console.error(`[assets] thumbnail error for ${assetName}:`, error);
     res.status(500).end();
