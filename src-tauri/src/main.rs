@@ -416,6 +416,86 @@ fn wait_for_proxy_ready(port: u16, timeout: Duration) -> bool {
     false
 }
 
+fn http_get(host: &str, port: u16, path: &str) -> io::Result<String> {
+    use std::io::Write;
+
+    let mut stream = TcpStream::connect((host, port))?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .ok();
+
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\n\r\n",
+        path, host, port
+    );
+    stream.write_all(request.as_bytes())?;
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).ok();
+
+    let mut parts = response.splitn(2, "\r\n\r\n");
+    let head = parts.next().unwrap_or_default();
+    let body = parts.next().unwrap_or_default();
+
+    let status = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .unwrap_or(0);
+    if !(200..300).contains(&status) {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("HTTP GET {} returned {}", path, status),
+        ));
+    }
+
+    Ok(body.to_string())
+}
+
+fn browser_access_url(start_path: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct BrowserAccessLink {
+        url: String,
+    }
+
+    let endpoint = format!(
+        "/api/lomo/browser-access-link?path={}",
+        percent_encode_data_url(start_path)
+    );
+
+    match http_get("127.0.0.1", 3001, &endpoint).and_then(|body| {
+        serde_json::from_str::<BrowserAccessLink>(&body)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }) {
+        Ok(link) => Some(link.url),
+        Err(error) => {
+            eprintln!("[tauri] Failed to resolve browser access URL: {}", error);
+            None
+        }
+    }
+}
+
+fn open_default_browser(url: &str) -> io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        hidden_command("rundll32.exe")
+            .args(["url.dll,FileProtocolHandler", url])
+            .spawn()
+            .map(|_| ())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(url).spawn().map(|_| ())
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(url).spawn().map(|_| ())
+    }
+}
+
 fn run_startup(
     app: tauri::AppHandle,
     resource_dir: PathBuf,
@@ -515,18 +595,20 @@ fn run_startup(
     }));
 
     update_startup_progress(&app, 96, "Opening viewer");
+    // On first ever launch, show the welcome wizard in both the app and browser.
+    let mut config = get_app_config(&data_dir);
+    let start_path = if !config.welcome_shown {
+        config.welcome_shown = true;
+        if let Err(e) = save_config(&data_dir, &config) {
+            eprintln!("[tauri] Failed to save welcome_shown: {}", e);
+        }
+        "/lomo-welcome"
+    } else {
+        "/"
+    };
+    let start_url = format!("http://localhost:3001{}", start_path);
+
     if let Some(main) = app.get_webview_window("main") {
-        // On first ever launch, show the welcome wizard inside the main window.
-        let mut config = get_app_config(&data_dir);
-        let start_url = if !config.welcome_shown {
-            config.welcome_shown = true;
-            if let Err(e) = save_config(&data_dir, &config) {
-                eprintln!("[tauri] Failed to save welcome_shown: {}", e);
-            }
-            "http://localhost:3001/lomo-welcome"
-        } else {
-            "http://localhost:3001"
-        };
         let parsed_url = start_url
             .parse()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
@@ -536,6 +618,12 @@ fn run_startup(
 
         #[cfg(debug_assertions)]
         main.open_devtools();
+    }
+
+    let browser_url = browser_access_url(start_path).unwrap_or_else(|| start_url.clone());
+    println!("[tauri] Opening browser at {}", browser_url);
+    if let Err(error) = open_default_browser(&browser_url) {
+        eprintln!("[tauri] Failed to open browser: {}", error);
     }
 
     update_startup_progress(&app, 100, "Ready");
@@ -585,7 +673,6 @@ fn parse_backend_mode(value: &str) -> Result<BackendMode, String> {
 fn config_path(data_dir: &std::path::Path) -> PathBuf {
     data_dir.join("config.json")
 }
-
 
 fn normalize_config(mut config: AppConfig, data_dir: &std::path::Path) -> AppConfig {
     if let Some(mode) = config.backend_mode {
@@ -1511,7 +1598,6 @@ fn create_tray_icon(app: &mut tauri::App) -> tauri::Result<()> {
     tray_builder.build(app)?;
     Ok(())
 }
-
 
 /// Make a simple HTTP POST request using raw TCP (no external deps).
 fn http_post(host: &str, port: u16, path: &str, body: &str) -> io::Result<u16> {

@@ -438,9 +438,38 @@ function getRequestHost(req: { get(name: string): string | undefined }): string 
   return hostHeader.split(':')[0] || 'localhost';
 }
 
+function normalizeBrowserPath(path: unknown): string {
+  if (typeof path !== 'string' || !path.startsWith('/')) {
+    return '/';
+  }
+
+  if (path.startsWith('//') || path.includes('\\')) {
+    return '/';
+  }
+
+  return path;
+}
+
 // GET /api/lomo/settings
 stubsRouter.get('/lomo/settings', (_req, res) => {
   res.json(readConfig());
+});
+
+// GET /api/lomo/browser-access-link
+stubsRouter.get('/lomo/browser-access-link', (req, res) => {
+  const port = Number(process.env.PROXY_PORT || 3001);
+  const lanAddresses = getLanAddresses();
+  const host = lanAddresses[0] ?? getRequestHost(req);
+  const path = normalizeBrowserPath(req.query.path);
+  const buildUrl = (address: string) => `http://${address}:${port}${path}`;
+
+  res.json({
+    url: buildUrl(host),
+    host,
+    port,
+    path,
+    candidateUrls: lanAddresses.map(buildUrl),
+  });
 });
 
 // GET /api/lomo/mobile-upload-link
