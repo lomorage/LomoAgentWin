@@ -11,7 +11,7 @@ use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
 #[cfg(target_os = "windows")]
@@ -19,6 +19,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const TRAY_SHOW_APP_ID: &str = "tray-show-app";
 const TRAY_QUIT_ID: &str = "tray-quit";
+const TRAY_ICON: tauri::image::Image<'_> = tauri::include_image!("./icons/icon.ico");
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -1581,21 +1582,29 @@ fn create_tray_icon(app: &mut tauri::App) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show_app, &quit])?;
 
-    let mut tray_builder = TrayIconBuilder::with_id("main-tray")
+    TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
+        .icon(TRAY_ICON)
         .tooltip("lomorage")
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
             TRAY_SHOW_APP_ID => show_main_window(app),
             TRAY_QUIT_ID => quit_from_tray(app),
             _ => {}
-        });
-
-    if let Some(icon) = app.default_window_icon().cloned() {
-        tray_builder = tray_builder.icon(icon);
-    }
-
-    tray_builder.build(app)?;
+        })
+        .on_tray_icon_event(|tray, event| match event {
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            }
+            | TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            } => show_main_window(tray.app_handle()),
+            _ => {}
+        })
+        .build(app)?;
     Ok(())
 }
 
