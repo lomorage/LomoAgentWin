@@ -11,7 +11,7 @@ use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
 #[cfg(target_os = "windows")]
@@ -72,6 +72,10 @@ struct AppState {
     proxy_process: Option<Child>,
     resource_dir: PathBuf,
     data_dir: PathBuf,
+}
+
+struct TrayState {
+    _tray_icon: TrayIcon,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -1577,12 +1581,12 @@ fn quit_from_tray(app: &tauri::AppHandle) {
     app.exit(0);
 }
 
-fn create_tray_icon(app: &mut tauri::App) -> tauri::Result<()> {
+fn create_tray_icon(app: &mut tauri::App) -> tauri::Result<TrayIcon> {
     let show_app = MenuItem::with_id(app, TRAY_SHOW_APP_ID, "Show App", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show_app, &quit])?;
 
-    TrayIconBuilder::with_id("main-tray")
+    let tray_icon = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
         .icon(TRAY_ICON)
         .tooltip("lomorage")
@@ -1605,7 +1609,8 @@ fn create_tray_icon(app: &mut tauri::App) -> tauri::Result<()> {
             _ => {}
         })
         .build(app)?;
-    Ok(())
+    tray_icon.set_visible(true)?;
+    Ok(tray_icon)
 }
 
 /// Make a simple HTTP POST request using raw TCP (no external deps).
@@ -2232,7 +2237,10 @@ fn main() {
                 .app_data_dir()
                 .expect("Failed to get app data dir");
 
-            create_tray_icon(app)?;
+            let tray_icon = create_tray_icon(app)?;
+            app.manage(TrayState {
+                _tray_icon: tray_icon,
+            });
 
             if let Some(main) = app.get_webview_window("main") {
                 let _ = main.hide();
@@ -2253,24 +2261,24 @@ fn main() {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if window.label() != "main" {
-                return;
-            }
-
-            match event {
-                tauri::WindowEvent::CloseRequested { api, .. } => {
-                    api.prevent_close();
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                if window.label() == "main" {
                     let _ = window.hide();
                 }
-                tauri::WindowEvent::Destroyed => {
-                    if let Some(state) = window.app_handle().try_state::<Mutex<AppState>>() {
-                        let mut state = state.lock().unwrap();
-                        kill_processes(&mut state);
-                    }
-                }
-                _ => {}
             }
+            tauri::WindowEvent::Destroyed => {
+                if window.label() != "main" {
+                    return;
+                }
+
+                if let Some(state) = window.app_handle().try_state::<Mutex<AppState>>() {
+                    let mut state = state.lock().unwrap();
+                    kill_processes(&mut state);
+                }
+            }
+            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("error running tauri application");
