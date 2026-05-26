@@ -24,7 +24,7 @@ function getSharp(): any {
   }
   return _sharp;
 }
-import { cacheDimensions } from '../dimensions-cache';
+import { cacheDimensions, readCachedThumbhash, computeAndStoreThumbhash } from '../dimensions-cache';
 import { fetchAssetStatusMapForDates, isFavoriteStatus } from '../lomo-assets';
 import { getLomoToken } from '../session';
 import { clearAlbumBucketCache } from './timeline';
@@ -338,6 +338,12 @@ assetsRouter.get('/:id/thumbnail', async (req, res) => {
     res.setHeader('Content-Length', thumbnail.buffer.length);
     res.setHeader('Cache-Control', `public, max-age=${THUMBNAIL_CACHE_MAX_AGE_SECONDS}, immutable`);
     res.end(thumbnail.buffer);
+
+    // After sending the response: compute thumbhash from the buffer if not yet cached.
+    // Zero extra HTTP cost — we already have the image. Fire-and-forget.
+    if (!readCachedThumbhash(assetName, auth.serverUrl)) {
+      computeAndStoreThumbhash(thumbnail.buffer, assetName, auth.serverUrl);
+    }
   } catch (error) {
     if (abortController.signal.aborted) {
       return;

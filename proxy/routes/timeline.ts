@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import fetch from 'node-fetch';
-import { getCachedAssetRatios, prefetchMissingAssetRatios } from '../dimensions-cache';
+import { getCachedAssetRatios, prefetchMissingAssetRatios, type AssetCacheEntry } from '../dimensions-cache';
 import {
   fetchAssetDateInfos,
   fetchAssetStatusMapForDates,
@@ -94,11 +94,33 @@ const timelineBucketCache = new Map<string, {
 const timelineBucketInflight = new Map<string, Promise<TimelineBucket[]>>();
 let timelineBucketCacheGeneration = 0;
 
+// Per-bucket content cache: caches the fully-assembled bucket response for fast repeat access
+// and pre-warmed adjacent months. Key: serverUrl\0userId\0year\0month\0favoriteFilter
+const BUCKET_CONTENT_CACHE_TTL = 120_000; // 2 minutes
+const bucketContentCache = new Map<string, { data: object; timestamp: number }>();
+
+function bucketContentCacheKey(
+  serverUrl: string,
+  userId: string,
+  year: number,
+  month: number,
+  favoriteFilter: boolean | undefined,
+): string {
+  return [serverUrl, userId, year, month, favoriteFilter === undefined ? 'all' : String(favoriteFilter)].join('\0');
+}
+
 export function clearAlbumBucketCache() {
   albumBucketCache.clear();
   timelineBucketCache.clear();
   timelineBucketInflight.clear();
+  bucketContentCache.clear();
   timelineBucketCacheGeneration += 1;
+}
+
+function offsetMonthBucket(timeBucket: string, delta: number): string {
+  const d = new Date(timeBucket);
+  d.setUTCMonth(d.getUTCMonth() + delta);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-01T00:00:00.000Z`;
 }
 
 function getTimelineBucketCacheKey(
@@ -156,10 +178,14 @@ async function fetchTimelineBuckets(
   }
 
   const buckets: TimelineBucket[] = [];
+  // Collect every asset we see — used below for background thumbhash backfill
+  const allAssets: Array<{ name: string; hash: string }> = [];
+
   for (const entry of monthEntries) {
     let count = 0;
     for (const day of entry.days) {
       for (const asset of day.Assets || []) {
+        allAssets.push({ name: asset.Name, hash: asset.Hash });
         if (favoriteFilter === undefined || isFavoriteStatus(asset.Status) === favoriteFilter) {
           count += 1;
         }
@@ -173,7 +199,14 @@ async function fetchTimelineBuckets(
 
   // Sort descending (newest first) — Immich default
   buckets.sort((a, b) => b.timeBucket.localeCompare(a.timeBucket));
-  console.log(`[timeline] returning ${buckets.length} buckets`);
+  console.log(`[timeline] returning ${buckets.length} buckets, queuing ${allAssets.length} assets for thumbhash backfill`);
+
+  // Background: probe thumbhash for every asset that doesn't have one yet.
+  // Higher concurrency (16) here because this is a one-time catch-up sweep,
+  // not an interactive request path.
+  setImmediate(() => {
+    prefetchMissingAssetRatios(allAssets, token, serverUrl, 16);
+  });
 
   return buckets;
 }
@@ -339,7 +372,7 @@ timelineRouter.get('/bucket', async (req, res) => {
           : assets.filter((asset) => isFavoriteStatus(statusMap.get(asset.name) ?? 0) === favoriteFilter);
 
       const albumAssets = filteredAssets.map(a => ({ name: a.name, hash: a.hash }));
-      const albumRatioMap = await getCachedAssetRatios(albumAssets, auth.serverUrl);
+      const albumCacheMap = await getCachedAssetRatios(albumAssets, auth.serverUrl);
       prefetchMissingAssetRatios(albumAssets, auth.token, auth.serverUrl);
 
       const result = {
@@ -355,12 +388,19 @@ timelineRouter.get('/bucket', async (req, res) => {
         localOffsetHours: filteredAssets.map(() => 0),
         ownerId: filteredAssets.map(() => auth.userId),
         projectionType: filteredAssets.map(() => null),
-        ratio: filteredAssets.map(a => albumRatioMap.get(a.name) ?? (isVideoExt(a.name) ? 1.78 : 1.5)),
-        thumbhash: filteredAssets.map(() => null),
+        ratio: filteredAssets.map(a => albumCacheMap.get(a.name)?.ratio ?? (isVideoExt(a.name) ? 1.78 : 1.5)),
+        thumbhash: filteredAssets.map(a => albumCacheMap.get(a.name)?.thumbhash ?? null),
         visibility: filteredAssets.map(() => 'timeline'),
       };
 
       return res.json(result);
+    }
+
+    // Check per-bucket content cache first (also populated by adjacent pre-warming)
+    const contentCacheKey = bucketContentCacheKey(auth.serverUrl, auth.userId, year, month, favoriteFilter);
+    const cachedContent = bucketContentCache.get(contentCacheKey);
+    if (cachedContent && Date.now() - cachedContent.timestamp < BUCKET_CONTENT_CACHE_TTL) {
+      return res.json(cachedContent.data);
     }
 
     const lomoRes = await fetch(`${auth.serverUrl}/assets/merkletree/${year}/${month}?token=${auth.token}`);
@@ -384,7 +424,7 @@ timelineRouter.get('/bucket', async (req, res) => {
         : allAssets.filter((entry) => isFavoriteStatus(entry.asset.Status) === favoriteFilter);
 
     const assetsForRatios = filteredAssets.map(a => ({ name: a.asset.Name, hash: a.asset.Hash }));
-    const ratioMap = await getCachedAssetRatios(assetsForRatios, auth.serverUrl);
+    const assetCacheMap = await getCachedAssetRatios(assetsForRatios, auth.serverUrl);
     prefetchMissingAssetRatios(assetsForRatios, auth.token, auth.serverUrl);
 
     // Build column-oriented response (TimeBucketAssetResponseDto)
@@ -401,12 +441,80 @@ timelineRouter.get('/bucket', async (req, res) => {
       localOffsetHours: filteredAssets.map(() => 0),
       ownerId: filteredAssets.map(() => auth.userId),
       projectionType: filteredAssets.map(() => null),
-      ratio: filteredAssets.map(a => ratioMap.get(a.asset.Name) ?? (isVideoExt(a.asset.Name) ? 1.78 : 1.5)),
-      thumbhash: filteredAssets.map(() => null),
+      ratio: filteredAssets.map(a => assetCacheMap.get(a.asset.Name)?.ratio ?? (isVideoExt(a.asset.Name) ? 1.78 : 1.5)),
+      thumbhash: filteredAssets.map(a => assetCacheMap.get(a.asset.Name)?.thumbhash ?? null),
       visibility: filteredAssets.map(a => (a.asset.Status & 2) !== 0 ? 'hidden' : 'timeline'),
     };
 
+    // Store in content cache
+    bucketContentCache.set(contentCacheKey, { data: result, timestamp: Date.now() });
+
     res.json(result);
+
+    // Pre-warm adjacent months in background (fire-and-forget)
+    // This ensures the next/previous month is ready before the user scrolls to it
+    setImmediate(() => {
+      for (const delta of [-1, 1]) {
+        const neighborBucket = offsetMonthBucket(timeBucket, delta);
+        const neighborDate = new Date(neighborBucket);
+        const neighborYear = neighborDate.getUTCFullYear();
+        const neighborMonth = neighborDate.getUTCMonth() + 1;
+        const neighborKey = bucketContentCacheKey(auth.serverUrl, auth.userId, neighborYear, neighborMonth, favoriteFilter);
+
+        // Skip if already cached
+        const neighborCached = bucketContentCache.get(neighborKey);
+        if (neighborCached && Date.now() - neighborCached.timestamp < BUCKET_CONTENT_CACHE_TTL) {
+          continue;
+        }
+
+        void (async () => {
+          try {
+            const r = await fetch(`${auth.serverUrl}/assets/merkletree/${neighborYear}/${neighborMonth}?token=${auth.token}`);
+            if (!r.ok) return;
+            const neighborData = await r.json() as LomoMonthDetail;
+            const neighborAllAssets: Array<{ asset: LomoAsset; day: number }> = [];
+            for (const day of neighborData.Days || []) {
+              for (const asset of day.Assets || []) {
+                neighborAllAssets.push({ asset, day: day.Day });
+              }
+            }
+            const neighborFiltered =
+              favoriteFilter === undefined
+                ? neighborAllAssets
+                : neighborAllAssets.filter((entry) => isFavoriteStatus(entry.asset.Status) === favoriteFilter);
+
+            if (neighborFiltered.length === 0) return;
+
+            const neighborAssetsForRatios = neighborFiltered.map(a => ({ name: a.asset.Name, hash: a.asset.Hash }));
+            const neighborCacheMap = await getCachedAssetRatios(neighborAssetsForRatios, auth.serverUrl);
+            prefetchMissingAssetRatios(neighborAssetsForRatios, auth.token, auth.serverUrl);
+
+            const neighborResult = {
+              id: neighborFiltered.map(a => a.asset.Name),
+              city: neighborFiltered.map(() => null),
+              country: neighborFiltered.map(() => null),
+              duration: neighborFiltered.map(a => isVideoExt(a.asset.Name) ? '0:00:00.000000' : null),
+              fileCreatedAt: neighborFiltered.map(a => a.asset.Date),
+              isFavorite: neighborFiltered.map(a => isFavoriteStatus(a.asset.Status)),
+              isImage: neighborFiltered.map(a => isImageExt(a.asset.Name)),
+              isTrashed: neighborFiltered.map(() => false),
+              livePhotoVideoId: neighborFiltered.map(() => null),
+              localOffsetHours: neighborFiltered.map(() => 0),
+              ownerId: neighborFiltered.map(() => auth.userId),
+              projectionType: neighborFiltered.map(() => null),
+              ratio: neighborFiltered.map(a => neighborCacheMap.get(a.asset.Name)?.ratio ?? (isVideoExt(a.asset.Name) ? 1.78 : 1.5)),
+              thumbhash: neighborFiltered.map(a => neighborCacheMap.get(a.asset.Name)?.thumbhash ?? null),
+              visibility: neighborFiltered.map(a => (a.asset.Status & 2) !== 0 ? 'hidden' : 'timeline'),
+            };
+
+            bucketContentCache.set(neighborKey, { data: neighborResult, timestamp: Date.now() });
+            console.log(`[timeline] pre-warmed bucket ${neighborYear}/${neighborMonth} (${neighborFiltered.length} assets)`);
+          } catch {
+            // Silent — pre-warming is best-effort
+          }
+        })();
+      }
+    });
   } catch (error) {
     console.error('[timeline] bucket error:', error);
     res.status(500).json({ message: 'Internal error' });

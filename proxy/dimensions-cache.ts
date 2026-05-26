@@ -1,7 +1,9 @@
 import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import fetch from 'node-fetch';
 import probe from 'probe-image-size';
+import { rgbaToThumbHash } from 'thumbhash';
 
 export type AssetDimensionDescriptor = {
   name: string;
@@ -14,6 +16,7 @@ type Dimensions = {
 };
 
 type DimensionsCacheRecord = Dimensions & {
+  thumbhash?: string | null;
   updatedAt: string;
 };
 
@@ -21,6 +24,28 @@ type PersistedDimensionsCache = {
   version: 1;
   entries: Record<string, DimensionsCacheRecord>;
 };
+
+export type AssetCacheEntry = {
+  ratio: number;
+  thumbhash: string | null;
+};
+
+// sharp is loaded lazily from NODE_PATH (native module, excluded from pkg snapshot)
+let _sharp: any = null;
+function getSharp(): any {
+  if (!_sharp) {
+    const nodePath = process.env.NODE_PATH || '';
+    if (nodePath) {
+      const sharpPath = require('path').join(nodePath, 'sharp');
+      const { createRequire } = require('module');
+      const externalRequire = createRequire(sharpPath + '/');
+      _sharp = externalRequire(sharpPath);
+    } else {
+      _sharp = require('sharp');
+    }
+  }
+  return _sharp;
+}
 
 const cache = new Map<string, DimensionsCacheRecord>();
 const inflight = new Map<string, Promise<Dimensions | null>>();
@@ -115,10 +140,9 @@ async function saveCache(): Promise<void> {
   await fs.promises.rename(tmpPath, filePath);
 }
 
-function readCachedDimensions(asset: string | AssetDimensionDescriptor, serverUrl: string): Dimensions | null {
+function readCachedDimensions(asset: string | AssetDimensionDescriptor, serverUrl: string): DimensionsCacheRecord | null {
   const descriptor = normalizeAsset(asset);
-  const cached = cache.get(cacheKey(serverUrl, descriptor));
-  return cached ? { width: cached.width, height: cached.height } : null;
+  return cache.get(cacheKey(serverUrl, descriptor)) ?? null;
 }
 
 async function probeAssetDimensions(
@@ -129,8 +153,9 @@ async function probeAssetDimensions(
   const descriptor = normalizeAsset(asset);
   const key = cacheKey(serverUrl, descriptor);
   const cached = readCachedDimensions(descriptor, serverUrl);
-  if (cached) {
-    return cached;
+  // If we already have both dimensions AND thumbhash, nothing more to do
+  if (cached?.thumbhash != null) {
+    return { width: cached.width, height: cached.height };
   }
 
   const existing = inflight.get(key);
@@ -141,10 +166,39 @@ async function probeAssetDimensions(
   const pending = (async () => {
     try {
       const url = `${serverUrl}/asset/preview/${encodeURIComponent(descriptor.name)}?token=${token}&width=75&height=0`;
-      const result = await probe(url);
-      const dims = { width: result.width, height: result.height };
-      cacheDimensions(descriptor, dims.width, dims.height, serverUrl);
-      return dims;
+
+      // Download the small preview buffer — one HTTP call gives us both dimensions and thumbhash
+      const response = await fetch(url);
+      if (!response.ok) {
+        return null;
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
+
+      let width: number;
+      let height: number;
+      let thumbhash: string | null = null;
+
+      try {
+        // Use sharp: extract RGBA pixels for thumbhash + read dimensions in one pass
+        const s = getSharp();
+        const { data, info } = await s(buffer)
+          .ensureAlpha()
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+        width = info.width;
+        height = info.height;
+
+        const hashBytes = rgbaToThumbHash(info.width, info.height, data);
+        thumbhash = Buffer.from(hashBytes).toString('base64');
+      } catch {
+        // sharp unavailable — fall back to probe-image-size for dimensions only
+        const result = await probe(buffer as any);
+        width = result.width;
+        height = result.height;
+      }
+
+      cacheDimensions(descriptor, width, height, serverUrl, thumbhash);
+      return { width, height };
     } catch {
       return null;
     } finally {
@@ -159,26 +213,29 @@ async function probeAssetDimensions(
 export async function getCachedAssetRatios(
   assets: Array<string | AssetDimensionDescriptor>,
   serverUrl: string,
-): Promise<Map<string, number>> {
+): Promise<Map<string, AssetCacheEntry>> {
   await ensureCacheLoaded();
 
-  const ratios = new Map<string, number>();
+  const result = new Map<string, AssetCacheEntry>();
   for (const asset of assets) {
     const descriptor = normalizeAsset(asset);
-    const dims = readCachedDimensions(descriptor, serverUrl);
-    if (dims && dims.height > 0) {
-      ratios.set(descriptor.name, dims.width / dims.height);
+    const cached = readCachedDimensions(descriptor, serverUrl);
+    if (cached && cached.height > 0) {
+      result.set(descriptor.name, {
+        ratio: cached.width / cached.height,
+        thumbhash: cached.thumbhash ?? null,
+      });
     }
   }
 
-  return ratios;
+  return result;
 }
 
 export function prefetchMissingAssetRatios(
   assets: Array<string | AssetDimensionDescriptor>,
   token: string,
   serverUrl: string,
-  concurrency = 1,
+  concurrency = 8,
 ): void {
   void (async () => {
     await ensureCacheLoaded();
@@ -187,7 +244,9 @@ export function prefetchMissingAssetRatios(
     for (const asset of assets) {
       const descriptor = normalizeAsset(asset);
       const key = cacheKey(serverUrl, descriptor);
-      if (readCachedDimensions(descriptor, serverUrl) || inflight.has(key) || prefetchQueue.has(key)) {
+      // Skip only if thumbhash is already present — entries with dims but no thumbhash must be re-probed
+      const existing = readCachedDimensions(descriptor, serverUrl);
+      if ((existing?.thumbhash != null) || inflight.has(key) || prefetchQueue.has(key)) {
         continue;
       }
       prefetchQueue.set(key, { asset: descriptor, token, serverUrl });
@@ -215,7 +274,7 @@ function schedulePrefetchDrain(concurrency: number): void {
     void drainPrefetchQueue(concurrency).catch((error) => {
       console.warn('[dimensions] background ratio probe failed:', error);
     });
-  }, 3000);
+  }, 200);
   prefetchTimer.unref?.();
 }
 
@@ -266,23 +325,67 @@ export async function getAssetRatios(
 }
 
 /**
- * Store dimensions in cache (e.g., from a larger preview probe).
+ * Store dimensions (and optional thumbhash) in cache.
+ * Called from probeAssetDimensions and from assets.ts when full-resolution dimensions are known.
  */
 export function cacheDimensions(
   asset: string | AssetDimensionDescriptor,
   width: number,
   height: number,
   serverUrl: string,
+  thumbhash?: string | null,
 ): void {
   if (!Number.isFinite(width) || !Number.isFinite(height) || height <= 0) {
     return;
   }
 
   const descriptor = normalizeAsset(asset);
-  cache.set(cacheKey(serverUrl, descriptor), {
+  const key = cacheKey(serverUrl, descriptor);
+  const existing = cache.get(key);
+  cache.set(key, {
     width,
     height,
+    // Preserve existing thumbhash if we don't have a new one
+    thumbhash: thumbhash !== undefined ? thumbhash : (existing?.thumbhash ?? null),
     updatedAt: new Date().toISOString(),
   });
   scheduleCacheSave();
+}
+
+/**
+ * Check if thumbhash is already cached for an asset (used by thumbnail endpoint
+ * to decide whether to compute it from the served buffer).
+ */
+export function readCachedThumbhash(
+  asset: string | AssetDimensionDescriptor,
+  serverUrl: string,
+): string | null {
+  const descriptor = normalizeAsset(asset);
+  return cache.get(cacheKey(serverUrl, descriptor))?.thumbhash ?? null;
+}
+
+/**
+ * Compute thumbhash from an image buffer and store it alongside dimensions.
+ * Called by the thumbnail endpoint after serving a buffer — zero extra HTTP cost.
+ * Fire-and-forget: does not block the HTTP response.
+ */
+export function computeAndStoreThumbhash(
+  buffer: Buffer,
+  asset: string | AssetDimensionDescriptor,
+  serverUrl: string,
+): void {
+  void (async () => {
+    try {
+      const s = getSharp();
+      const { data, info } = await s(buffer)
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      const hashBytes = rgbaToThumbHash(info.width, info.height, data);
+      const thumbhash = Buffer.from(hashBytes).toString('base64');
+      cacheDimensions(asset, info.width, info.height, serverUrl, thumbhash);
+    } catch {
+      // Sharp unavailable or bad image — skip silently
+    }
+  })();
 }
