@@ -51,9 +51,13 @@ if (-not $SkipWeb) {
     Write-Host "`n--- Step 1: Building Immich web frontend ---" -ForegroundColor Yellow
     Push-Location "$ScriptDir\submodules\immich\web"
 
-    Write-Host "Installing dependencies..."
-    pnpm install --force
-    if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
+    if (Test-Path "node_modules") {
+        Write-Host "Dependencies already installed; skipping pnpm install."
+    } else {
+        Write-Host "Installing dependencies..."
+        pnpm install
+        if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
+    }
 
     Write-Host "Building static SPA..."
     if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
