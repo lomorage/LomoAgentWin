@@ -6,6 +6,7 @@ const FAVORITE_STATUS_MASK = 8;
 export interface LomoAssetDateInfo {
   name: string;
   date: string;
+  hash?: string;
 }
 
 export interface LomoAssetSummary extends LomoAssetDateInfo {
@@ -14,6 +15,7 @@ export interface LomoAssetSummary extends LomoAssetDateInfo {
 
 interface LomoAssetMetadata {
   Date?: string;
+  Hash?: string;
 }
 
 interface LomoDayDetail {
@@ -61,7 +63,7 @@ export async function fetchAssetDateInfos(
           const metaRes = await fetch(`${serverUrl}/asset/metadata/${encodeURIComponent(name)}?token=${token}`);
           if (metaRes.ok) {
             const meta = await metaRes.json() as LomoAssetMetadata;
-            return { name, date: meta.Date || DEFAULT_ASSET_DATE };
+            return { name, date: meta.Date || DEFAULT_ASSET_DATE, hash: meta.Hash };
           }
         } catch {
           // Ignore individual metadata failures and fall back to a stable default date.

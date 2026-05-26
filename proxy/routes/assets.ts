@@ -41,9 +41,14 @@ function isHeic(name: string): boolean {
  * lacks the HEVC decoder plugin. Then resizes with sharp.
  */
 async function sharpFallbackThumbnail(
-  serverUrl: string, token: string, assetName: string, width: number, height: number
+  serverUrl: string,
+  token: string,
+  assetName: string,
+  width: number,
+  height: number,
+  signal?: AbortSignal,
 ): Promise<Buffer> {
-  const origRes = await fetch(`${serverUrl}/asset/${encodeURIComponent(assetName)}?token=${token}`);
+  const origRes = await fetch(`${serverUrl}/asset/${encodeURIComponent(assetName)}?token=${token}`, { signal });
   if (!origRes.ok) {
     throw new Error(`Failed to fetch original: ${origRes.status}`);
   }
@@ -86,8 +91,14 @@ type ThumbnailCacheMeta = {
 };
 
 const THUMBNAIL_CACHE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
-const THUMBNAIL_FETCH_CONCURRENCY = Number(process.env.THUMBNAIL_FETCH_CONCURRENCY || 6);
+const THUMBNAIL_FETCH_CONCURRENCY = parsePositiveInteger(process.env.THUMBNAIL_FETCH_CONCURRENCY, 6);
+const LOMO_THUMBNAIL_WIDTH = parsePositiveInteger(process.env.LOMO_THUMBNAIL_WIDTH, 180);
 const thumbnailInflight = new Map<string, Promise<ThumbnailResult>>();
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 class AsyncLimiter {
   private active = 0;
@@ -95,9 +106,33 @@ class AsyncLimiter {
 
   constructor(private readonly limit: number) {}
 
-  async run<T>(task: () => Promise<T>): Promise<T> {
+  async run<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (this.active >= this.limit) {
-      await new Promise<void>((resolve) => this.queue.push(resolve));
+      await new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) {
+          reject(new Error('Request aborted'));
+          return;
+        }
+
+        const release = () => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve();
+        };
+        const onAbort = () => {
+          const index = this.queue.indexOf(release);
+          if (index >= 0) {
+            this.queue.splice(index, 1);
+          }
+          reject(new Error('Request aborted'));
+        };
+
+        signal?.addEventListener('abort', onAbort, { once: true });
+        this.queue.push(release);
+      });
+    }
+
+    if (signal?.aborted) {
+      throw new Error('Request aborted');
     }
 
     this.active += 1;
@@ -180,9 +215,11 @@ async function fetchThumbnailFromLomo(
   assetName: string,
   width: number,
   height: number,
+  signal?: AbortSignal,
 ): Promise<ThumbnailResult> {
   const lomoRes = await fetch(
     `${serverUrl}/asset/preview/${encodeURIComponent(assetName)}?token=${token}&width=${width}&height=${height}`,
+    { signal },
   );
 
   if (lomoRes.ok) {
@@ -195,7 +232,7 @@ async function fetchThumbnailFromLomo(
 
   // Fallback: convert original with sharp (handles HEIC, etc.)
   console.log(`[assets] sharp fallback for thumbnail ${assetName}`);
-  const buffer = await sharpFallbackThumbnail(serverUrl, token, assetName, width, height);
+  const buffer = await sharpFallbackThumbnail(serverUrl, token, assetName, width, height, signal);
   return { buffer, contentType: 'image/jpeg' };
 }
 
@@ -206,6 +243,7 @@ async function getCachedThumbnail(
   width: number,
   height: number,
   size: string,
+  signal?: AbortSignal,
 ): Promise<ThumbnailResult> {
   const cacheKey = thumbnailCacheKey(serverUrl, assetName, width, height, size);
   const cached = await readThumbnailCache(cacheKey);
@@ -225,12 +263,12 @@ async function getCachedThumbnail(
         return cachedAfterQueue;
       }
 
-      const result = await fetchThumbnailFromLomo(serverUrl, token, assetName, width, height);
+      const result = await fetchThumbnailFromLomo(serverUrl, token, assetName, width, height, signal);
       await writeThumbnailCache(cacheKey, result).catch((error) => {
         console.warn(`[assets] thumbnail cache write failed for ${assetName}:`, error);
       });
       return result;
-    })
+    }, signal)
     .finally(() => {
       thumbnailInflight.delete(cacheKey);
     });
@@ -265,11 +303,18 @@ assetsRouter.get('/:id/thumbnail', async (req, res) => {
     return res.status(401).json({ message: 'Not authenticated' });
   }
 
+  const abortController = new AbortController();
+  req.on('close', () => {
+    if (!res.writableEnded) {
+      abortController.abort();
+    }
+  });
+
   const assetName = req.params.id;
   const size = req.query.size as string;
 
   // Map Immich sizes to lomo preview dimensions
-  let width = 250;
+  let width = LOMO_THUMBNAIL_WIDTH;
   let height = 0;
   if (size === 'preview') {
     width = 1080;
@@ -277,12 +322,26 @@ assetsRouter.get('/:id/thumbnail', async (req, res) => {
   }
 
   try {
-    const thumbnail = await getCachedThumbnail(auth.serverUrl, auth.token, assetName, width, height, size || 'thumbnail');
+    const thumbnail = await getCachedThumbnail(
+      auth.serverUrl,
+      auth.token,
+      assetName,
+      width,
+      height,
+      size || 'thumbnail',
+      abortController.signal,
+    );
+    if (abortController.signal.aborted) {
+      return;
+    }
     res.setHeader('Content-Type', thumbnail.contentType);
     res.setHeader('Content-Length', thumbnail.buffer.length);
     res.setHeader('Cache-Control', `public, max-age=${THUMBNAIL_CACHE_MAX_AGE_SECONDS}, immutable`);
     res.end(thumbnail.buffer);
   } catch (error) {
+    if (abortController.signal.aborted) {
+      return;
+    }
     console.error(`[assets] thumbnail error for ${assetName}:`, error);
     res.status(500).end();
   }
@@ -408,7 +467,7 @@ assetsRouter.get('/:id', async (req, res) => {
       const result = await probe(previewUrl);
       width = result.width;
       height = result.height;
-      cacheDimensions(meta.Name, width, height, auth.token, auth.serverUrl);
+      cacheDimensions({ name: meta.Name, hash: meta.Hash }, width, height, auth.serverUrl);
     } catch {
       // Fallback: fetch original and use sharp for dimensions (handles HEIC, etc.)
       try {
@@ -419,7 +478,7 @@ assetsRouter.get('/:id', async (req, res) => {
         const metadata = await s(buf).metadata();
           width = metadata.width || null;
           height = metadata.height || null;
-          if (width && height) cacheDimensions(meta.Name, width, height, auth.token, auth.serverUrl);
+          if (width && height) cacheDimensions({ name: meta.Name, hash: meta.Hash }, width, height, auth.serverUrl);
           console.log(`[assets] sharp metadata fallback for ${meta.Name}: ${width}x${height}`);
         }
       } catch (e2) {

@@ -15,3 +15,9 @@ base64 = "0.22"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+# Speed up release builds: allow parallel codegen across 16 units (default=1).
+# Trade-off: slightly larger binary, no runtime perf difference for this app.
+[profile.release]
+codegen-units = 16
+opt-level = 2   # default=3; level 2 is nearly as fast at runtime, compiles much faster

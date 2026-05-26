@@ -52,7 +52,7 @@ if (-not $SkipWeb) {
     Push-Location "$ScriptDir\submodules\immich\web"
 
     Write-Host "Installing dependencies..."
-    pnpm install --force
+    pnpm install
     if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
 
     Write-Host "Building static SPA..."

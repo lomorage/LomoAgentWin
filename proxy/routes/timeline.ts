@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import fetch from 'node-fetch';
-import { getAssetRatios } from '../dimensions-cache';
+import { getCachedAssetRatios, prefetchMissingAssetRatios } from '../dimensions-cache';
 import {
   fetchAssetDateInfos,
   fetchAssetStatusMapForDates,
@@ -338,9 +338,9 @@ timelineRouter.get('/bucket', async (req, res) => {
           ? assets
           : assets.filter((asset) => isFavoriteStatus(statusMap.get(asset.name) ?? 0) === favoriteFilter);
 
-      // Probe actual dimensions for album assets
-      const albumAssetNames = filteredAssets.map(a => a.name);
-      const albumRatioMap = await getAssetRatios(albumAssetNames, auth.token, auth.serverUrl);
+      const albumAssets = filteredAssets.map(a => ({ name: a.name, hash: a.hash }));
+      const albumRatioMap = await getCachedAssetRatios(albumAssets, auth.serverUrl);
+      prefetchMissingAssetRatios(albumAssets, auth.token, auth.serverUrl);
 
       const result = {
         id: filteredAssets.map(a => a.name),
@@ -383,9 +383,9 @@ timelineRouter.get('/bucket', async (req, res) => {
         ? allAssets
         : allAssets.filter((entry) => isFavoriteStatus(entry.asset.Status) === favoriteFilter);
 
-    // Probe actual dimensions for all assets in parallel
-    const assetNames = filteredAssets.map(a => a.asset.Name);
-    const ratioMap = await getAssetRatios(assetNames, auth.token, auth.serverUrl);
+    const assetsForRatios = filteredAssets.map(a => ({ name: a.asset.Name, hash: a.asset.Hash }));
+    const ratioMap = await getCachedAssetRatios(assetsForRatios, auth.serverUrl);
+    prefetchMissingAssetRatios(assetsForRatios, auth.token, auth.serverUrl);
 
     // Build column-oriented response (TimeBucketAssetResponseDto)
     const result = {
