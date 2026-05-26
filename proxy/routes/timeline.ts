@@ -22,7 +22,7 @@ interface LomoAsset {
 }
 
 interface LomoDay {
-  Assets: LomoAsset[];
+  Assets?: LomoAsset[];
   Day: number;
   Hash: string;
 }
@@ -54,6 +54,12 @@ type TimelineBucket = {
   timeBucket: string;
   count: number;
 };
+
+function needsMonthDetail(entry: { days: LomoDay[] }): boolean {
+  return entry.days.length === 0
+    || entry.days.some((day) => !Array.isArray(day.Assets))
+    || !entry.days.some((day) => (day.Assets || []).length > 0);
+}
 
 class UpstreamHttpError extends Error {
   constructor(
@@ -127,12 +133,13 @@ async function fetchTimelineBuckets(
     }
   }
 
-  // If the root tree doesn't include day/asset data (Days empty), fetch each month detail
-  const rootHasAssets = monthEntries.some((m) => m.days.length > 0);
-  if (!rootHasAssets && monthEntries.length > 0) {
-    console.log(`[timeline] root tree has no day detail, fetching ${monthEntries.length} month(s) individually`);
+  // If the root tree doesn't include asset detail, fetch month detail.
+  // Favorites depend on the per-asset Status bit, so day hashes alone are not enough.
+  const entriesNeedingDetail = monthEntries.filter(needsMonthDetail);
+  if (entriesNeedingDetail.length > 0) {
+    console.log(`[timeline] root tree missing asset detail, fetching ${entriesNeedingDetail.length} month(s) individually`);
     await Promise.all(
-      monthEntries.map(async (entry) => {
+      entriesNeedingDetail.map(async (entry) => {
         try {
           const res = await fetch(
             `${serverUrl}/assets/merkletree/${entry.year}/${entry.month}?token=${token}`,
