@@ -93,6 +93,7 @@ struct LocalLibraryDbUser {
 struct LocalLibraryDbCandidate {
     path: String,
     source: String,
+    in_selected_folder: bool,
     users: Vec<LocalLibraryDbUser>,
     user_count: usize,
     load_error: Option<String>,
@@ -862,6 +863,13 @@ fn local_library_db_paths(
     matches
 }
 
+fn db_is_in_selected_folder(photos_dir: &std::path::Path, db_path: &std::path::Path) -> bool {
+    let db = path_str(db_path).replace('/', "\\").to_lowercase();
+    let photos_prefix =
+        format!("{}\\", path_str(&clean_path(photos_dir)).replace('/', "\\")).to_lowercase();
+    !photos_prefix.is_empty() && db.starts_with(&photos_prefix)
+}
+
 fn assets_db_source(
     data_dir: &std::path::Path,
     photos_dir: &std::path::Path,
@@ -880,9 +888,7 @@ fn assets_db_source(
         return "Current runtime database".into();
     }
 
-    let photos_prefix =
-        format!("{}\\", path_str(&clean_path(photos_dir)).replace('/', "\\")).to_lowercase();
-    if db.replace('/', "\\").starts_with(&photos_prefix) {
+    if db_is_in_selected_folder(photos_dir, db_path) {
         return "Selected folder database".into();
     }
 
@@ -944,12 +950,14 @@ fn local_library_db_candidates(
         .into_iter()
         .map(|db_path| {
             let source = assets_db_source(data_dir, photos_dir, &db_path);
+            let in_selected_folder = db_is_in_selected_folder(photos_dir, &db_path);
             match local_library_db_users(&db_path) {
                 Ok(users) => {
                     let user_count = users.len();
                     LocalLibraryDbCandidate {
                         path: path_str(&db_path),
                         source,
+                        in_selected_folder,
                         users,
                         user_count,
                         load_error: None,
@@ -958,6 +966,7 @@ fn local_library_db_candidates(
                 Err(error) => LocalLibraryDbCandidate {
                     path: path_str(&db_path),
                     source,
+                    in_selected_folder,
                     users: Vec::new(),
                     user_count: 0,
                     load_error: Some(error),
@@ -1811,9 +1820,11 @@ fn inspect_local_library_folder(
     } else {
         local_library_db_candidates(&state.data_dir, &photos_path)
     };
+    // Folder-scoped: only a library that physically lives in the selected folder blocks
+    // creating a new library there. Global/runtime DBs remain available to adopt below.
     let has_existing_user_db = db_candidates
         .iter()
-        .any(|candidate| candidate.user_count > 0);
+        .any(|candidate| candidate.in_selected_folder && candidate.user_count > 0);
 
     Ok(serde_json::json!({
         "photos_dir": if trimmed.is_empty() { String::new() } else { path_str(&photos_path) },
