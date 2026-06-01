@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { Router } from 'express';
 import multer from 'multer';
-import fetch from 'node-fetch';
+import { lomoFetch } from '../http-agent';
 import probe from 'probe-image-size';
 import heicConvert from 'heic-convert';
 // sharp is loaded lazily from NODE_PATH to work with pkg (native modules can't be in snapshot)
@@ -48,7 +48,7 @@ async function sharpFallbackThumbnail(
   height: number,
   signal?: AbortSignal,
 ): Promise<Buffer> {
-  const origRes = await fetch(`${serverUrl}/asset/${encodeURIComponent(assetName)}?token=${token}`, { signal });
+  const origRes = await lomoFetch(`${serverUrl}/asset/${encodeURIComponent(assetName)}?token=${token}`, { signal });
   if (!origRes.ok) {
     throw new Error(`Failed to fetch original: ${origRes.status}`);
   }
@@ -92,7 +92,15 @@ type ThumbnailCacheMeta = {
 
 const THUMBNAIL_CACHE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const THUMBNAIL_FETCH_CONCURRENCY = parsePositiveInteger(process.env.THUMBNAIL_FETCH_CONCURRENCY, 6);
-const LOMO_THUMBNAIL_WIDTH = parsePositiveInteger(process.env.LOMO_THUMBNAIL_WIDTH, 180);
+// lomod pre-generates webp previews at native widths 75 / 320 / 640. Requesting a
+// native width lets lomod serve the stored .webp file directly (no re-encode).
+// 320 is the grid sweet spot: crisp (~10KB) and a static file.
+const LOMO_THUMBNAIL_WIDTH = parsePositiveInteger(process.env.LOMO_THUMBNAIL_WIDTH, 320);
+const LOMO_PREVIEW_WIDTH = parsePositiveInteger(process.env.LOMO_PREVIEW_WIDTH, 640);
+// lomod's /asset/preview supports `icodec=webp` (see lomo-backend-api.md). Requesting
+// webp makes lomod serve its pre-generated _<width>_0.webp file (smaller over the wire
+// than JPEG — a real win in remote mode). Override with LOMO_IMAGE_CODEC=jpg if needed.
+const LOMO_IMAGE_CODEC = (process.env.LOMO_IMAGE_CODEC || 'webp').trim();
 const thumbnailInflight = new Map<string, Promise<ThumbnailResult>>();
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
@@ -153,7 +161,10 @@ function getThumbnailCacheDir(): string {
 }
 
 function thumbnailCacheKey(serverUrl: string, assetName: string, width: number, height: number, size: string): string {
-  return createHash('sha1').update(`${serverUrl}\0${assetName}\0${width}\0${height}\0${size}`).digest('hex');
+  // Codec is part of the key so switching JPEG<->webp doesn't serve stale entries.
+  return createHash('sha1')
+    .update(`${serverUrl}\0${assetName}\0${width}\0${height}\0${size}\0${LOMO_IMAGE_CODEC}`)
+    .digest('hex');
 }
 
 function thumbnailCachePaths(cacheKey: string): { dataPath: string; metaPath: string } {
@@ -217,8 +228,8 @@ async function fetchThumbnailFromLomo(
   height: number,
   signal?: AbortSignal,
 ): Promise<ThumbnailResult> {
-  const lomoRes = await fetch(
-    `${serverUrl}/asset/preview/${encodeURIComponent(assetName)}?token=${token}&width=${width}&height=${height}`,
+  const lomoRes = await lomoFetch(
+    `${serverUrl}/asset/preview/${encodeURIComponent(assetName)}?token=${token}&width=${width}&height=${height}&icodec=${LOMO_IMAGE_CODEC}`,
     { signal },
   );
 
@@ -313,11 +324,40 @@ assetsRouter.get('/:id/thumbnail', async (req, res) => {
   const assetName = req.params.id;
   const size = req.query.size as string;
 
-  // Map Immich sizes to lomo preview dimensions
+  // Full-screen photo view: serve the ORIGINAL at full resolution — no downscaling.
+  // `/asset/{name}?icodec=jpg` returns a browser-safe, full-res JPEG (transcodes HEIC;
+  // lomod caches the result so repeats are fast). Videos fall through to a poster below.
+  if (size === 'preview' && isImage(assetName)) {
+    try {
+      const lomoRes = await lomoFetch(
+        `${auth.serverUrl}/asset/${encodeURIComponent(assetName)}?token=${auth.token}&icodec=jpg`,
+        { signal: abortController.signal },
+      );
+      if (!lomoRes.ok) {
+        if (abortController.signal.aborted) return;
+        console.error(`[assets] full-res preview ${assetName} failed: ${lomoRes.status}`);
+        return res.status(lomoRes.status).end();
+      }
+      res.setHeader('Content-Type', lomoRes.headers.get('content-type') || 'image/jpeg');
+      const len = lomoRes.headers.get('content-length');
+      if (len) res.setHeader('Content-Length', len);
+      res.setHeader('Cache-Control', `public, max-age=${THUMBNAIL_CACHE_MAX_AGE_SECONDS}, immutable`);
+      lomoRes.body?.pipe(res);
+    } catch (error) {
+      if (abortController.signal.aborted) return;
+      console.error(`[assets] full-res preview error for ${assetName}:`, error);
+      res.status(500).end();
+    }
+    return;
+  }
+
+  // Map Immich sizes to lomo preview dimensions (grid thumbnail, or video poster).
   let width = LOMO_THUMBNAIL_WIDTH;
   let height = 0;
   if (size === 'preview') {
-    width = 1080;
+    // Video poster only (images are handled full-res above). 640 is lomod's largest
+    // native webp width — served as a file, no re-encode.
+    width = LOMO_PREVIEW_WIDTH;
     height = 0;
   }
 
@@ -366,7 +406,7 @@ assetsRouter.get('/:id/original', async (req, res) => {
   const assetName = req.params.id;
 
   try {
-    const lomoRes = await fetch(
+    const lomoRes = await lomoFetch(
       `${auth.serverUrl}/asset/${encodeURIComponent(assetName)}?token=${auth.token}`
     );
 
@@ -405,7 +445,7 @@ assetsRouter.get('/:id/video/playback', async (req, res) => {
   const assetName = req.params.id;
 
   try {
-    const lomoRes = await fetch(
+    const lomoRes = await lomoFetch(
       `${auth.serverUrl}/asset/${encodeURIComponent(assetName)}?token=${auth.token}`
     );
 
@@ -440,7 +480,7 @@ assetsRouter.get('/:id', async (req, res) => {
   const assetName = req.params.id;
 
   try {
-    const lomoRes = await fetch(
+    const lomoRes = await lomoFetch(
       `${auth.serverUrl}/asset/metadata/${encodeURIComponent(assetName)}?token=${auth.token}`
     );
 
@@ -477,7 +517,7 @@ assetsRouter.get('/:id', async (req, res) => {
     } catch {
       // Fallback: fetch original and use sharp for dimensions (handles HEIC, etc.)
       try {
-        const origRes = await fetch(`${auth.serverUrl}/asset/${encodeURIComponent(meta.Name)}?token=${auth.token}`);
+        const origRes = await lomoFetch(`${auth.serverUrl}/asset/${encodeURIComponent(meta.Name)}?token=${auth.token}`);
         if (origRes.ok) {
           const buf = Buffer.from(await origRes.arrayBuffer());
           const s = getSharp();
@@ -580,7 +620,7 @@ assetsRouter.post('/', upload.single('assetData'), async (req, res) => {
 
     console.log(`[assets] upload: ${file.originalname} (${file.size} bytes), sha1=${sha1}, ext=${ext}`);
 
-    const lomoRes = await fetch(
+    const lomoRes = await lomoFetch(
       `${auth.serverUrl}/asset/${sha1}?token=${auth.token}&ext=${ext}&modifiedtime=${encodeURIComponent(modifiedTime)}`,
       {
         method: 'POST',
@@ -620,7 +660,7 @@ assetsRouter.post('/', upload.single('assetData'), async (req, res) => {
 async function setFavorite(serverUrl: string, token: string, ids: string[], isFavorite: boolean): Promise<boolean> {
   const method = isFavorite ? 'POST' : 'DELETE';
   console.log(`[assets] ${isFavorite ? 'favorite' : 'unfavorite'}: ${ids.length} assets`);
-  const lomoRes = await fetch(`${serverUrl}/assets/favorite?token=${token}`, {
+  const lomoRes = await lomoFetch(`${serverUrl}/assets/favorite?token=${token}`, {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(ids),
@@ -682,7 +722,7 @@ assetsRouter.put('/:id', async (req, res) => {
     }
 
     // Return updated asset — re-fetch metadata
-    const lomoRes = await fetch(
+    const lomoRes = await lomoFetch(
       `${auth.serverUrl}/asset/metadata/${encodeURIComponent(assetName)}?token=${auth.token}`
     );
     if (!lomoRes.ok) {
@@ -754,7 +794,7 @@ assetsRouter.delete('/', async (req, res) => {
 
     console.log(`[assets] bulk delete: ${ids.length} assets, force=${!!force}`);
 
-    const lomoRes = await fetch(`${auth.serverUrl}/asset?token=${auth.token}`, {
+    const lomoRes = await lomoFetch(`${auth.serverUrl}/asset?token=${auth.token}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ List: deleteList }),

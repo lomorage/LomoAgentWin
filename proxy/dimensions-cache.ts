@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import fetch from 'node-fetch';
+import { lomoFetch } from './http-agent';
 import probe from 'probe-image-size';
 import { rgbaToThumbHash } from 'thumbhash';
 
@@ -165,10 +165,11 @@ async function probeAssetDimensions(
 
   const pending = (async () => {
     try {
-      const url = `${serverUrl}/asset/preview/${encodeURIComponent(descriptor.name)}?token=${token}&width=75&height=0`;
+      // icodec=webp: lomod serves its pre-generated 75px webp (smaller than JPEG). sharp decodes webp fine.
+      const url = `${serverUrl}/asset/preview/${encodeURIComponent(descriptor.name)}?token=${token}&width=75&height=0&icodec=webp`;
 
       // Download the small preview buffer — one HTTP call gives us both dimensions and thumbhash
-      const response = await fetch(url);
+      const response = await lomoFetch(url);
       if (!response.ok) {
         return null;
       }
