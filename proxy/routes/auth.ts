@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import fetch from 'node-fetch';
+import { lomoFetch } from '../http-agent';
 import { argon2id } from 'hash-wasm';
 import { createSession, deleteSession, hasSession } from '../session';
 
@@ -80,7 +80,7 @@ authRouter.post('/login', async (req, res) => {
     const base64Credentials = Buffer.from(`${username}:${hexPassword}:${deviceId}`).toString('base64');
 
     // Call lomo-backend login
-    const lomoRes = await fetch(`${serverUrl}/login`, {
+    const lomoRes = await lomoFetch(`${serverUrl}/login`, {
       headers: {
         Authorization: `Basic ${base64Credentials}`,
       },

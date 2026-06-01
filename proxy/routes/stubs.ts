@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import * as os from 'os';
-import fetch from 'node-fetch';
+import { lomoFetch } from '../http-agent';
 import { getLomoToken } from '../session';
 
 export const stubsRouter = Router();
@@ -76,7 +76,7 @@ stubsRouter.get('/server/storage', async (req, res) => {
   const auth = getLomoToken(req);
   if (auth) {
     try {
-      const lomoRes = await fetch(`${auth.serverUrl}/mount?token=${auth.token}`);
+      const lomoRes = await lomoFetch(`${auth.serverUrl}/mount?token=${auth.token}`);
       if (lomoRes.ok) {
         type MountEntry = { FreeSize?: number; TotalSize?: number; Error?: string };
         const mounts = await lomoRes.json() as MountEntry[];
@@ -167,7 +167,7 @@ stubsRouter.get('/assets/statistics', async (req, res) => {
   const auth = getLomoToken(req);
   if (auth) {
     try {
-      const lomoRes = await fetch(`${auth.serverUrl}/assets/merkletree?token=${auth.token}`);
+      const lomoRes = await lomoFetch(`${auth.serverUrl}/assets/merkletree?token=${auth.token}`);
       if (lomoRes.ok) {
         type LomoAsset = { Name: string };
         type LomoDay = { Assets?: LomoAsset[] };

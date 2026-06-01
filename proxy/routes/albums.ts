@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import fetch from 'node-fetch';
+import { lomoFetch } from '../http-agent';
 import { fetchAssetSummaries, isFavoriteStatus } from '../lomo-assets';
 import { getLomoToken } from '../session';
 
@@ -93,7 +93,7 @@ albumsRouter.get('/', async (req, res) => {
       return res.json(albumListCache.data);
     }
 
-    const lomoRes = await fetch(`${auth.serverUrl}/album?token=${auth.token}`);
+    const lomoRes = await lomoFetch(`${auth.serverUrl}/album?token=${auth.token}`);
     if (!lomoRes.ok) {
       console.error(`[albums] list failed: ${lomoRes.status}`);
       return res.status(lomoRes.status).json({ message: 'Failed to fetch albums' });
@@ -110,7 +110,7 @@ albumsRouter.get('/', async (req, res) => {
 
         try {
           // Get asset count via HEAD
-          const headRes = await fetch(`${auth.serverUrl}/album/${album.ID}/assets?token=${auth.token}`, {
+          const headRes = await lomoFetch(`${auth.serverUrl}/album/${album.ID}/assets?token=${auth.token}`, {
             method: 'HEAD',
           });
           const countHeader = headRes.headers.get('x-total-count');
@@ -120,7 +120,7 @@ albumsRouter.get('/', async (req, res) => {
 
           // Get first asset for thumbnail
           if (assetCount > 0) {
-            const assetsRes = await fetch(
+            const assetsRes = await lomoFetch(
               `${auth.serverUrl}/album/${album.ID}/assets?token=${auth.token}&page=0&limit=1`,
             );
             if (assetsRes.ok) {
@@ -163,7 +163,7 @@ albumsRouter.get('/:id', async (req, res) => {
 
   try {
     // Get album info
-    const lomoRes = await fetch(`${auth.serverUrl}/album?token=${auth.token}`);
+    const lomoRes = await lomoFetch(`${auth.serverUrl}/album?token=${auth.token}`);
     if (!lomoRes.ok) {
       return res.status(lomoRes.status).json({ message: 'Failed to fetch albums' });
     }
@@ -176,7 +176,7 @@ albumsRouter.get('/:id', async (req, res) => {
 
     // Get asset count
     let assetCount = 0;
-    const headRes = await fetch(`${auth.serverUrl}/album/${albumId}/assets?token=${auth.token}`, {
+    const headRes = await lomoFetch(`${auth.serverUrl}/album/${albumId}/assets?token=${auth.token}`, {
       method: 'HEAD',
     });
     const countHeader = headRes.headers.get('x-total-count');
@@ -190,7 +190,7 @@ albumsRouter.get('/:id', async (req, res) => {
     const withoutAssets = req.query.withoutAssets === 'true';
 
     if (!withoutAssets && assetCount > 0) {
-      const assetsRes = await fetch(
+      const assetsRes = await lomoFetch(
         `${auth.serverUrl}/album/${albumId}/assets?token=${auth.token}&page=0&limit=10000`,
       );
       if (assetsRes.ok) {
@@ -221,7 +221,7 @@ albumsRouter.get('/:id', async (req, res) => {
       }
     } else if (assetCount > 0) {
       // Just get the first asset for thumbnail
-      const assetsRes = await fetch(
+      const assetsRes = await lomoFetch(
         `${auth.serverUrl}/album/${albumId}/assets?token=${auth.token}&page=0&limit=1`,
       );
       if (assetsRes.ok) {
@@ -251,7 +251,7 @@ albumsRouter.post('/', async (req, res) => {
 
   try {
     const { albumName, description } = req.body;
-    const lomoRes = await fetch(`${auth.serverUrl}/album?token=${auth.token}`, {
+    const lomoRes = await lomoFetch(`${auth.serverUrl}/album?token=${auth.token}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -293,7 +293,7 @@ albumsRouter.patch('/:id', async (req, res) => {
     if (albumName !== undefined) updateBody.Title = albumName;
     if (description !== undefined) updateBody.Description = description;
 
-    const lomoRes = await fetch(`${auth.serverUrl}/album?token=${auth.token}`, {
+    const lomoRes = await lomoFetch(`${auth.serverUrl}/album?token=${auth.token}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updateBody),
@@ -306,7 +306,7 @@ albumsRouter.patch('/:id', async (req, res) => {
     }
 
     // Fetch the updated album to return
-    const listRes = await fetch(`${auth.serverUrl}/album?token=${auth.token}`);
+    const listRes = await lomoFetch(`${auth.serverUrl}/album?token=${auth.token}`);
     const data = await listRes.json() as LomoAlbumList;
     const album = (data.Albums || []).find((a) => String(a.ID) === albumId);
 
@@ -332,7 +332,7 @@ albumsRouter.delete('/:id', async (req, res) => {
   }
 
   try {
-    const lomoRes = await fetch(`${auth.serverUrl}/album/${req.params.id}?token=${auth.token}`, {
+    const lomoRes = await lomoFetch(`${auth.serverUrl}/album/${req.params.id}?token=${auth.token}`, {
       method: 'DELETE',
     });
 
@@ -367,7 +367,7 @@ albumsRouter.put('/:id/assets', async (req, res) => {
       return dotIdx > 0 ? id.substring(0, dotIdx) : id;
     });
 
-    const lomoRes = await fetch(`${auth.serverUrl}/album/${req.params.id}/assets?token=${auth.token}`, {
+    const lomoRes = await lomoFetch(`${auth.serverUrl}/album/${req.params.id}/assets?token=${auth.token}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(assetIds),
@@ -409,7 +409,7 @@ albumsRouter.delete('/:id/assets', async (req, res) => {
       return dotIdx > 0 ? id.substring(0, dotIdx) : id;
     });
 
-    const lomoRes = await fetch(`${auth.serverUrl}/album/${req.params.id}/assets?token=${auth.token}`, {
+    const lomoRes = await lomoFetch(`${auth.serverUrl}/album/${req.params.id}/assets?token=${auth.token}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(assetIds),

@@ -1,4 +1,4 @@
-import fetch from 'node-fetch';
+import { lomoFetch } from './http-agent';
 
 const DEFAULT_ASSET_DATE = '2000-01-01T00:00:00Z';
 const FAVORITE_STATUS_MASK = 8;
@@ -60,7 +60,7 @@ export async function fetchAssetDateInfos(
     const batchResults = await Promise.all(
       batch.map(async (name) => {
         try {
-          const metaRes = await fetch(`${serverUrl}/asset/metadata/${encodeURIComponent(name)}?token=${token}`);
+          const metaRes = await lomoFetch(`${serverUrl}/asset/metadata/${encodeURIComponent(name)}?token=${token}`);
           if (metaRes.ok) {
             const meta = await metaRes.json() as LomoAssetMetadata;
             return { name, date: meta.Date || DEFAULT_ASSET_DATE, hash: meta.Hash };
@@ -105,7 +105,7 @@ export async function fetchAssetStatusMapForDates(
   const dayResults = await Promise.all(
     Array.from(dayRequests.values()).map(async ({ year, month, day }) => {
       try {
-        const res = await fetch(`${serverUrl}/assets/merkletree/${year}/${month}/${day}?token=${token}`);
+        const res = await lomoFetch(`${serverUrl}/assets/merkletree/${year}/${month}/${day}?token=${token}`);
         if (!res.ok) {
           return [];
         }
