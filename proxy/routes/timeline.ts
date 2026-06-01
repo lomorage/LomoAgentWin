@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import fetch from 'node-fetch';
+import { lomoFetch } from '../http-agent';
 import { getCachedAssetRatios, prefetchMissingAssetRatios, type AssetCacheEntry } from '../dimensions-cache';
 import {
   fetchAssetDateInfos,
@@ -137,7 +137,7 @@ async function fetchTimelineBuckets(
   token: string,
   favoriteFilter: boolean | undefined,
 ): Promise<TimelineBucket[]> {
-  const lomoRes = await fetch(`${serverUrl}/assets/merkletree?token=${token}`);
+  const lomoRes = await lomoFetch(`${serverUrl}/assets/merkletree?token=${token}`);
   if (!lomoRes.ok) {
     console.error(`[timeline] merkletree failed: ${lomoRes.status}`);
     throw new UpstreamHttpError(lomoRes.status, 'Failed to fetch assets');
@@ -163,7 +163,7 @@ async function fetchTimelineBuckets(
     await Promise.all(
       entriesNeedingDetail.map(async (entry) => {
         try {
-          const res = await fetch(
+          const res = await lomoFetch(
             `${serverUrl}/assets/merkletree/${entry.year}/${entry.month}?token=${token}`,
           );
           if (res.ok) {
@@ -178,14 +178,11 @@ async function fetchTimelineBuckets(
   }
 
   const buckets: TimelineBucket[] = [];
-  // Collect every asset we see — used below for background thumbhash backfill
-  const allAssets: Array<{ name: string; hash: string }> = [];
 
   for (const entry of monthEntries) {
     let count = 0;
     for (const day of entry.days) {
       for (const asset of day.Assets || []) {
-        allAssets.push({ name: asset.Name, hash: asset.Hash });
         if (favoriteFilter === undefined || isFavoriteStatus(asset.Status) === favoriteFilter) {
           count += 1;
         }
@@ -199,14 +196,12 @@ async function fetchTimelineBuckets(
 
   // Sort descending (newest first) — Immich default
   buckets.sort((a, b) => b.timeBucket.localeCompare(a.timeBucket));
-  console.log(`[timeline] returning ${buckets.length} buckets, queuing ${allAssets.length} assets for thumbhash backfill`);
+  console.log(`[timeline] returning ${buckets.length} buckets`);
 
-  // Background: probe thumbhash for every asset that doesn't have one yet.
-  // Higher concurrency (16) here because this is a one-time catch-up sweep,
-  // not an interactive request path.
-  setImmediate(() => {
-    prefetchMissingAssetRatios(allAssets, token, serverUrl, 16);
-  });
+  // NOTE: no whole-library thumbhash sweep here. It used to queue *every* asset
+  // (concurrency 16), flooding the backend and starving the visible grid. Ratios
+  // and thumbhashes are now filled lazily per visible bucket (see bucket-content
+  // and adjacent pre-warm below) and from each served grid thumbnail buffer.
 
   return buckets;
 }
@@ -260,7 +255,7 @@ async function fetchAlbumAssetsByMonth(
   }
 
   // Get all asset names in the album
-  const assetsRes = await fetch(
+  const assetsRes = await lomoFetch(
     `${serverUrl}/album/${albumId}/assets?token=${token}&page=0&limit=10000`,
   );
   if (!assetsRes.ok) {
@@ -403,7 +398,7 @@ timelineRouter.get('/bucket', async (req, res) => {
       return res.json(cachedContent.data);
     }
 
-    const lomoRes = await fetch(`${auth.serverUrl}/assets/merkletree/${year}/${month}?token=${auth.token}`);
+    const lomoRes = await lomoFetch(`${auth.serverUrl}/assets/merkletree/${year}/${month}?token=${auth.token}`);
     if (!lomoRes.ok) {
       console.error(`[timeline] bucket ${year}/${month} failed: ${lomoRes.status}`);
       return res.status(lomoRes.status).json({ message: 'Failed to fetch bucket' });
@@ -469,7 +464,7 @@ timelineRouter.get('/bucket', async (req, res) => {
 
         void (async () => {
           try {
-            const r = await fetch(`${auth.serverUrl}/assets/merkletree/${neighborYear}/${neighborMonth}?token=${auth.token}`);
+            const r = await lomoFetch(`${auth.serverUrl}/assets/merkletree/${neighborYear}/${neighborMonth}?token=${auth.token}`);
             if (!r.ok) return;
             const neighborData = await r.json() as LomoMonthDetail;
             const neighborAllAssets: Array<{ asset: LomoAsset; day: number }> = [];
