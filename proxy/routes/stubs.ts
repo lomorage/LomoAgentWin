@@ -496,6 +496,41 @@ stubsRouter.get('/lomo/mobile-upload-link', (req, res) => {
   });
 });
 
+// GET /api/lomo/setup-connect-info
+// The address a phone/browser uses to reach the photo library after first-run setup.
+// Local mode → LAN IP + backend port (e.g. http://192.168.1.42:8000).
+// Remote mode → the remote server URL the user signed in with.
+stubsRouter.get('/lomo/setup-connect-info', (req, res) => {
+  const auth = getLomoToken(req);
+  if (!auth) {
+    return res.status(401).json({ message: 'Not authenticated' });
+  }
+
+  const config = readConfig();
+  const mode = config.active_backend_mode;
+
+  if (mode === 'remote') {
+    return res.json({ url: auth.serverUrl, mode, candidateUrls: [auth.serverUrl] });
+  }
+
+  let backendPort = '8000';
+  try {
+    backendPort = new URL(auth.serverUrl).port || '8000';
+  } catch {
+    // Fall back to the default lomod port.
+  }
+
+  const lanAddresses = getLanAddresses();
+  const host = lanAddresses[0] ?? getRequestHost(req);
+  const buildUrl = (address: string) => `http://${address}:${backendPort}`;
+
+  res.json({
+    url: buildUrl(host),
+    mode,
+    candidateUrls: lanAddresses.map(buildUrl),
+  });
+});
+
 // PUT /api/lomo/settings
 stubsRouter.put('/lomo/settings', (req, res) => {
   try {
