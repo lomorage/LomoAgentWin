@@ -7,12 +7,17 @@ import { getLomoToken } from '../session';
 
 export const albumsRouter = Router();
 
-// Cache for album list: key -> { data, timestamp }
-let albumListCache: { data: any[]; timestamp: number } | null = null;
+// Cache for album list, keyed by session (serverUrl + userId) so a previous
+// local/remote session can never leak its albums into the current one.
+const albumListCache = new Map<string, { data: any[]; timestamp: number }>();
 const ALBUM_LIST_CACHE_TTL = 30_000; // 30 seconds
 
+function albumListCacheKey(serverUrl: string, userId: string): string {
+  return `${serverUrl}\0${userId}`;
+}
+
 export function clearAlbumListCache() {
-  albumListCache = null;
+  albumListCache.clear();
 }
 
 interface LomoAlbum {
@@ -72,6 +77,45 @@ function toAlbumResponseDto(
   };
 }
 
+type LomoAuth = { token: string; userId: string; username: string; serverUrl: string };
+
+/**
+ * Build an Immich album summary (count + thumbnail) for a lomo album.
+ * Shared by the full list and the per-asset ("appears in") list.
+ */
+async function buildAlbumSummary(album: LomoAlbum, auth: LomoAuth) {
+  let assetCount = 0;
+  let thumbnailAssetId: string | null = null;
+
+  try {
+    // Get asset count via HEAD
+    const headRes = await lomoFetch(`${auth.serverUrl}/album/${album.ID}/assets?token=${auth.token}`, {
+      method: 'HEAD',
+    });
+    const countHeader = headRes.headers.get('x-total-count');
+    if (countHeader) {
+      assetCount = parseInt(countHeader, 10);
+    }
+
+    // Get first asset for thumbnail
+    if (assetCount > 0) {
+      const assetsRes = await lomoFetch(
+        `${auth.serverUrl}/album/${album.ID}/assets?token=${auth.token}&page=0&limit=1`,
+      );
+      if (assetsRes.ok) {
+        const assetNames = await assetsRes.json() as string[];
+        if (assetNames.length > 0) {
+          thumbnailAssetId = assetNames[0];
+        }
+      }
+    }
+  } catch (e) {
+    console.error(`[albums] error fetching details for album ${album.ID}:`, e);
+  }
+
+  return toAlbumResponseDto(album, auth.userId, auth.username, assetCount, thumbnailAssetId);
+}
+
 /**
  * GET /api/albums
  * List all albums
@@ -87,10 +131,39 @@ albumsRouter.get('/', async (req, res) => {
     return res.json([]);
   }
 
+  // Immich's detail panel asks "which albums contain this asset" via ?assetId=.
+  // lomo has a dedicated endpoint for that; without it we'd return every album
+  // (and stale ones), so clicking a phantom album later 401s. See lomo-backend
+  // GET /asset/album/{assetID}.
+  const assetId = req.query.assetId as string | undefined;
+  if (assetId) {
+    try {
+      const lomoRes = await lomoFetch(
+        `${auth.serverUrl}/asset/album/${encodeURIComponent(assetId)}?token=${auth.token}`,
+      );
+      if (!lomoRes.ok) {
+        console.error(`[albums] asset-albums failed for ${assetId}: ${lomoRes.status}`);
+        return res.status(lomoRes.status).json({ message: 'Failed to fetch albums' });
+      }
+      const data = await lomoRes.json() as LomoAlbumList;
+      const albums = data.Albums || [];
+      const results = await Promise.all(
+        albums.map((album) => buildAlbumSummary(album, auth)),
+      );
+      return res.json(results);
+    } catch (error) {
+      console.error(`[albums] asset-albums error for ${assetId}:`, error);
+      return res.status(500).json({ message: 'Internal error' });
+    }
+  }
+
+  const cacheKey = albumListCacheKey(auth.serverUrl, auth.userId);
+
   try {
     // Return cached list if fresh
-    if (albumListCache && Date.now() - albumListCache.timestamp < ALBUM_LIST_CACHE_TTL) {
-      return res.json(albumListCache.data);
+    const cached = albumListCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < ALBUM_LIST_CACHE_TTL) {
+      return res.json(cached.data);
     }
 
     const lomoRes = await lomoFetch(`${auth.serverUrl}/album?token=${auth.token}`);
@@ -104,42 +177,11 @@ albumsRouter.get('/', async (req, res) => {
 
     // Fetch asset count and first asset for each album in parallel
     const results = await Promise.all(
-      albums.map(async (album) => {
-        let assetCount = 0;
-        let thumbnailAssetId: string | null = null;
-
-        try {
-          // Get asset count via HEAD
-          const headRes = await lomoFetch(`${auth.serverUrl}/album/${album.ID}/assets?token=${auth.token}`, {
-            method: 'HEAD',
-          });
-          const countHeader = headRes.headers.get('x-total-count');
-          if (countHeader) {
-            assetCount = parseInt(countHeader, 10);
-          }
-
-          // Get first asset for thumbnail
-          if (assetCount > 0) {
-            const assetsRes = await lomoFetch(
-              `${auth.serverUrl}/album/${album.ID}/assets?token=${auth.token}&page=0&limit=1`,
-            );
-            if (assetsRes.ok) {
-              const assetNames = await assetsRes.json() as string[];
-              if (assetNames.length > 0) {
-                thumbnailAssetId = assetNames[0];
-              }
-            }
-          }
-        } catch (e) {
-          console.error(`[albums] error fetching details for album ${album.ID}:`, e);
-        }
-
-        return toAlbumResponseDto(album, auth.userId, auth.username, assetCount, thumbnailAssetId);
-      }),
+      albums.map((album) => buildAlbumSummary(album, auth)),
     );
 
-    // Cache the result
-    albumListCache = { data: results, timestamp: Date.now() };
+    // Cache the result for this session
+    albumListCache.set(cacheKey, { data: results, timestamp: Date.now() });
 
     res.json(results);
   } catch (error) {
@@ -165,6 +207,8 @@ albumsRouter.get('/:id', async (req, res) => {
     // Get album info
     const lomoRes = await lomoFetch(`${auth.serverUrl}/album?token=${auth.token}`);
     if (!lomoRes.ok) {
+      const body = await lomoRes.text().catch(() => '');
+      console.error(`[albums] detail list failed: albumId=${albumId} status=${lomoRes.status} body=${body.slice(0, 200)}`);
       return res.status(lomoRes.status).json({ message: 'Failed to fetch albums' });
     }
 

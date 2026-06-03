@@ -80,11 +80,16 @@ function isVideoExt(name: string): boolean {
   return ['mp4', 'mov', 'avi', 'mkv', 'webm', '3gp', 'wmv', 'flv'].includes(ext);
 }
 
-// Cache for album assets grouped by month: albumId -> { data, timestamp }
+// Cache for album assets grouped by month, keyed by serverUrl\0albumId so
+// numeric album IDs can't collide across servers / sessions.
 const albumBucketCache = new Map<string, {
   data: Map<string, LomoAssetDateInfo[]>;
   timestamp: number;
 }>();
+
+function albumBucketCacheKey(serverUrl: string, albumId: string): string {
+  return `${serverUrl}\0${albumId}`;
+}
 const ALBUM_CACHE_TTL = 60_000; // 60 seconds
 const TIMELINE_BUCKET_CACHE_TTL = 60_000; // 60 seconds
 const timelineBucketCache = new Map<string, {
@@ -249,7 +254,8 @@ async function fetchAlbumAssetsByMonth(
   serverUrl: string,
 ): Promise<Map<string, LomoAssetDateInfo[]>> {
   // Check cache
-  const cached = albumBucketCache.get(albumId);
+  const cacheKey = albumBucketCacheKey(serverUrl, albumId);
+  const cached = albumBucketCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < ALBUM_CACHE_TTL) {
     return cached.data;
   }
@@ -278,7 +284,7 @@ async function fetchAlbumAssetsByMonth(
   }
 
   // Store in cache
-  albumBucketCache.set(albumId, { data: byMonth, timestamp: Date.now() });
+  albumBucketCache.set(cacheKey, { data: byMonth, timestamp: Date.now() });
 
   return byMonth;
 }

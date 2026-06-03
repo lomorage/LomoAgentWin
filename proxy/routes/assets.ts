@@ -35,6 +35,23 @@ function isHeic(name: string): boolean {
   return ext === 'heic' || ext === 'heif';
 }
 
+// Detect HEIC/HEIF by content (magic bytes), for files mislabeled with a .jpg/.png
+// extension. ISO-BMFF layout: [4-byte box size]['ftyp'][4-byte major brand].
+// Cheap: only inspects the first 12 bytes. Call this lazily — only after a normal
+// decode has already failed — so the happy path pays nothing.
+function looksLikeHeic(buf: Buffer): boolean {
+  if (buf.length < 12 || buf.toString('ascii', 4, 8) !== 'ftyp') {
+    return false;
+  }
+  const brand = buf.toString('ascii', 8, 12).toLowerCase();
+  return ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs', 'mif1', 'msf1', 'heif'].includes(brand);
+}
+
+async function heicBufferToJpeg(buf: Buffer, quality: number): Promise<Buffer> {
+  const converted = await heicConvert({ buffer: buf, format: 'JPEG', quality } as any);
+  return Buffer.from(converted);
+}
+
 /**
  * Fetch original asset from lomo and convert to JPEG.
  * For HEIC/HEIF files, uses heic-convert (pure JS) since sharp's Windows build
@@ -54,24 +71,34 @@ async function sharpFallbackThumbnail(
   }
   const buf = Buffer.from(await origRes.arrayBuffer());
 
-  let jpegBuf: Buffer;
-  if (isHeic(assetName)) {
-    // Convert HEIC to JPEG first using pure-JS decoder
-    console.log(`[assets] heic-convert for ${assetName}`);
-    const converted = await heicConvert({ buffer: buf, format: 'JPEG', quality: 0.8 } as any);
-    jpegBuf = Buffer.from(converted);
-  } else {
-    jpegBuf = buf;
-  }
-
-  // Resize with sharp
   const s = getSharp();
   const resizeWidth = width > 0 ? width : undefined;
   const resizeHeight = height > 0 ? height : undefined;
-  return s(jpegBuf)
-    .resize(resizeWidth, resizeHeight, { fit: 'inside', withoutEnlargement: true })
-    .jpeg({ quality: 80 })
-    .toBuffer();
+  const encode = (input: Buffer) =>
+    s(input)
+      .resize(resizeWidth, resizeHeight, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+
+  // Known HEIC by extension: decode with the pure-JS decoder up front (sharp's
+  // Windows build lacks the HEVC plugin, so attempting sharp first would just fail).
+  if (isHeic(assetName)) {
+    console.log(`[assets] heic-convert for ${assetName}`);
+    return encode(await heicBufferToJpeg(buf, 0.8));
+  }
+
+  // Otherwise assume a normal sharp-decodable image (jpg/png/webp/…) — the happy
+  // path, no magic-byte inspection. Only if sharp fails to decode do we check
+  // whether this is actually a HEIC mislabeled with a .jpg/.png extension.
+  try {
+    return await encode(buf);
+  } catch (error) {
+    if (looksLikeHeic(buf)) {
+      console.log(`[assets] ${assetName} decode failed; detected HEIC by content, using heic-convert`);
+      return encode(await heicBufferToJpeg(buf, 0.8));
+    }
+    throw error;
+  }
 }
 
 // LOMO_URL is now per-session via auth.serverUrl
@@ -474,6 +501,26 @@ assetsRouter.get('/:id/original', async (req, res) => {
     }
 
     const contentType = lomoRes.headers.get('content-type');
+
+    // Images: buffer so we can detect a HEIC mislabeled with a .jpg/.png extension.
+    // Such a file streamed as image/jpeg can't be decoded by the browser ("Error
+    // loading image"), so transcode it to real JPEG. Normal images are sent through
+    // unchanged. Videos (and anything non-image) keep streaming — never buffered.
+    if (isImage(assetName)) {
+      const buf = Buffer.from(await lomoRes.arrayBuffer());
+      let outBuf = buf;
+      let outType = contentType || 'image/jpeg';
+      if (looksLikeHeic(buf)) {
+        console.log(`[assets] original ${assetName} is HEIC by content; transcoding to JPEG`);
+        outBuf = await heicBufferToJpeg(buf, 0.9);
+        outType = 'image/jpeg';
+      }
+      res.setHeader('Content-Type', outType);
+      res.setHeader('Content-Length', outBuf.length);
+      res.setHeader('Content-Disposition', `inline; filename="${assetName}"`);
+      return res.end(outBuf);
+    }
+
     if (contentType) {
       res.setHeader('Content-Type', contentType);
     }

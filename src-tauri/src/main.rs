@@ -2232,7 +2232,52 @@ fn save_app_settings(
 
 // ── Main ────────────────────────────────────────────────────────────
 
+/// Bump this whenever a change alters the bytes the proxy serves for an image URL
+/// (e.g. the HEIC full-resolution decode fix). The WebView marks image responses
+/// `Cache-Control: immutable`, so previously-cached low-res previews would otherwise
+/// be served forever. Changing this value triggers a one-time HTTP-cache purge.
+const WEBVIEW_CACHE_SCHEMA: &str = "2-heic-fullres";
+
+/// Purge the WebView2 HTTP cache once, when WEBVIEW_CACHE_SCHEMA changes.
+///
+/// Runs at the very start of `main()` — before Tauri creates the webview window —
+/// so the cache files are not yet locked by the WebView2 process. Only the HTTP/
+/// code/GPU caches are removed; cookies and session live under `Default/Network`
+/// and are preserved so the user stays signed in.
+fn purge_webview_cache_if_schema_changed() {
+    let Some(local) = std::env::var_os("LOCALAPPDATA") else {
+        return;
+    };
+    let app_local = PathBuf::from(local).join("com.lomoware.photoviewer");
+    let webview = app_local.join("EBWebView");
+    if !webview.exists() {
+        return; // fresh install — nothing cached yet
+    }
+
+    let marker = app_local.join(".webview-cache-schema");
+    if std::fs::read_to_string(&marker)
+        .map(|v| v.trim() == WEBVIEW_CACHE_SCHEMA)
+        .unwrap_or(false)
+    {
+        return; // already current
+    }
+
+    let profile = webview.join("Default");
+    for sub in ["Cache", "Code Cache", "GPUCache"] {
+        let dir = profile.join(sub);
+        if dir.exists() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+    let _ = std::fs::write(&marker, WEBVIEW_CACHE_SCHEMA);
+    println!(
+        "[tauri] Purged WebView HTTP cache (schema {})",
+        WEBVIEW_CACHE_SCHEMA
+    );
+}
+
 fn main() {
+    purge_webview_cache_if_schema_changed();
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_app_settings,
