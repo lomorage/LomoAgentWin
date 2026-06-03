@@ -450,6 +450,22 @@ function normalizeBrowserPath(path: unknown): string {
   return path;
 }
 
+// The live session's serverUrl is the source of truth for which backend we're talking to.
+// config.active_backend_mode only stores the saved *default* and can read 'local' even while the
+// user is signed into a remote server for this session (remote URL passed via X-Lomo-Server at
+// login). A loopback serverUrl means the bundled local lomod; anything else is a remote server.
+function sessionBackendMode(serverUrl: string): 'local' | 'remote' {
+  try {
+    const host = new URL(serverUrl).hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0') {
+      return 'local';
+    }
+    return 'remote';
+  } catch {
+    return 'local';
+  }
+}
+
 // GET /api/lomo/settings
 stubsRouter.get('/lomo/settings', (_req, res) => {
   res.json(readConfig());
@@ -482,7 +498,6 @@ stubsRouter.get('/lomo/mobile-upload-link', (req, res) => {
   const port = Number(process.env.PROXY_PORT || 3001);
   const lanAddresses = getLanAddresses();
   const host = lanAddresses[0] ?? getRequestHost(req);
-  const config = readConfig();
   const params = new URLSearchParams({ server: auth.serverUrl });
   const preferredUrl = `http://${host}:${port}/mobile-upload?${params.toString()}`;
 
@@ -490,44 +505,9 @@ stubsRouter.get('/lomo/mobile-upload-link', (req, res) => {
     url: preferredUrl,
     host,
     port,
-    backendMode: config.active_backend_mode,
+    backendMode: sessionBackendMode(auth.serverUrl),
     backendUrl: auth.serverUrl,
     candidateUrls: lanAddresses.map((address) => `http://${address}:${port}/mobile-upload?${params.toString()}`),
-  });
-});
-
-// GET /api/lomo/setup-connect-info
-// The address a phone/browser uses to reach the photo library after first-run setup.
-// Local mode → LAN IP + backend port (e.g. http://192.168.1.42:8000).
-// Remote mode → the remote server URL the user signed in with.
-stubsRouter.get('/lomo/setup-connect-info', (req, res) => {
-  const auth = getLomoToken(req);
-  if (!auth) {
-    return res.status(401).json({ message: 'Not authenticated' });
-  }
-
-  const config = readConfig();
-  const mode = config.active_backend_mode;
-
-  if (mode === 'remote') {
-    return res.json({ url: auth.serverUrl, mode, candidateUrls: [auth.serverUrl] });
-  }
-
-  let backendPort = '8000';
-  try {
-    backendPort = new URL(auth.serverUrl).port || '8000';
-  } catch {
-    // Fall back to the default lomod port.
-  }
-
-  const lanAddresses = getLanAddresses();
-  const host = lanAddresses[0] ?? getRequestHost(req);
-  const buildUrl = (address: string) => `http://${address}:${backendPort}`;
-
-  res.json({
-    url: buildUrl(host),
-    mode,
-    candidateUrls: lanAddresses.map(buildUrl),
   });
 });
 

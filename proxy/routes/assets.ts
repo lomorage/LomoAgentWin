@@ -288,6 +288,71 @@ async function getCachedThumbnail(
   return pending;
 }
 
+/**
+ * Full-resolution image for the full-screen photo view.
+ *
+ * Fast path: lomod transcodes the original to a full-res JPEG via `?icodec=jpg`.
+ * Fallback: some servers' libvips lack the HEIF/HEVC loader, so for HEIC the
+ * `icodec=jpg` transcode (and any JIT preview generation) returns HTTP 500
+ * ("VipsForeignLoad: ... is not a known file format"). In that case we fetch the
+ * raw original and decode it locally at full resolution (heic-convert + sharp),
+ * exactly like the thumbnail path's sharp fallback. The result is cached so the
+ * slow pure-JS HEIC decode (and, in remote mode, the network fetch) only runs
+ * once per asset.
+ */
+async function getCachedFullResImage(
+  serverUrl: string,
+  token: string,
+  assetName: string,
+  signal?: AbortSignal,
+): Promise<ThumbnailResult> {
+  const cacheKey = thumbnailCacheKey(serverUrl, assetName, 0, 0, 'fullres');
+  const cached = await readThumbnailCache(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const existing = thumbnailInflight.get(cacheKey);
+  if (existing) {
+    return existing;
+  }
+
+  const pending = thumbnailFetchLimiter
+    .run(async () => {
+      const cachedAfterQueue = await readThumbnailCache(cacheKey);
+      if (cachedAfterQueue) {
+        return cachedAfterQueue;
+      }
+
+      let result: ThumbnailResult;
+      const lomoRes = await lomoFetch(
+        `${serverUrl}/asset/${encodeURIComponent(assetName)}?token=${token}&icodec=jpg`,
+        { signal },
+      );
+      const contentType = lomoRes.headers.get('content-type') || '';
+      if (lomoRes.ok && contentType.startsWith('image/')) {
+        result = { buffer: Buffer.from(await lomoRes.arrayBuffer()), contentType };
+      } else {
+        // Server can't transcode (e.g. libvips without the HEIF loader) — decode
+        // locally at full resolution (width/height 0 = no downscaling).
+        console.log(`[assets] full-res local decode for ${assetName} (lomod icodec=jpg ${lomoRes.status})`);
+        const buffer = await sharpFallbackThumbnail(serverUrl, token, assetName, 0, 0, signal);
+        result = { buffer, contentType: 'image/jpeg' };
+      }
+
+      await writeThumbnailCache(cacheKey, result).catch((error) => {
+        console.warn(`[assets] full-res cache write failed for ${assetName}:`, error);
+      });
+      return result;
+    }, signal)
+    .finally(() => {
+      thumbnailInflight.delete(cacheKey);
+    });
+
+  thumbnailInflight.set(cacheKey, pending);
+  return pending;
+}
+
 function getMimeType(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase() || '';
   const mimeMap: Record<string, string> = {
@@ -325,24 +390,17 @@ assetsRouter.get('/:id/thumbnail', async (req, res) => {
   const size = req.query.size as string;
 
   // Full-screen photo view: serve the ORIGINAL at full resolution — no downscaling.
-  // `/asset/{name}?icodec=jpg` returns a browser-safe, full-res JPEG (transcodes HEIC;
-  // lomod caches the result so repeats are fast). Videos fall through to a poster below.
+  // Prefers lomod's `?icodec=jpg` transcode, but falls back to a local full-res
+  // HEIC decode when the server can't transcode (see getCachedFullResImage).
+  // Videos fall through to a poster below.
   if (size === 'preview' && isImage(assetName)) {
     try {
-      const lomoRes = await lomoFetch(
-        `${auth.serverUrl}/asset/${encodeURIComponent(assetName)}?token=${auth.token}&icodec=jpg`,
-        { signal: abortController.signal },
-      );
-      if (!lomoRes.ok) {
-        if (abortController.signal.aborted) return;
-        console.error(`[assets] full-res preview ${assetName} failed: ${lomoRes.status}`);
-        return res.status(lomoRes.status).end();
-      }
-      res.setHeader('Content-Type', lomoRes.headers.get('content-type') || 'image/jpeg');
-      const len = lomoRes.headers.get('content-length');
-      if (len) res.setHeader('Content-Length', len);
+      const image = await getCachedFullResImage(auth.serverUrl, auth.token, assetName, abortController.signal);
+      if (abortController.signal.aborted) return;
+      res.setHeader('Content-Type', image.contentType);
+      res.setHeader('Content-Length', image.buffer.length);
       res.setHeader('Cache-Control', `public, max-age=${THUMBNAIL_CACHE_MAX_AGE_SECONDS}, immutable`);
-      lomoRes.body?.pipe(res);
+      res.end(image.buffer);
     } catch (error) {
       if (abortController.signal.aborted) return;
       console.error(`[assets] full-res preview error for ${assetName}:`, error);

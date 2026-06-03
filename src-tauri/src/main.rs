@@ -1742,6 +1742,14 @@ fn get_app_settings(state: tauri::State<'_, Mutex<AppState>>) -> Result<serde_js
 }
 
 #[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("Only http(s) URLs are allowed".into());
+    }
+    open_default_browser(&url).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn get_initial_setup_state(
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<serde_json::Value, String> {
@@ -2228,6 +2236,7 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_app_settings,
+            open_external_url,
             get_initial_setup_state,
             show_welcome_page,
             save_backend_preference,
