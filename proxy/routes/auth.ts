@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { randomBytes } from 'crypto';
 import { lomoFetch } from '../http-agent';
 import { argon2id } from 'hash-wasm';
 import { createSession, deleteSession, hasSession } from '../session';
@@ -51,18 +52,52 @@ function stringToHexByte(str: string): string {
   return hex;
 }
 
-function getLoginDeviceId(req: any): string {
-  const rawDeviceId = req.headers['x-lomo-device'] || req.body?.deviceId || req.body?.deviceName;
-  const value = Array.isArray(rawDeviceId) ? rawDeviceId[0] : rawDeviceId;
-  const normalized = String(value || DEFAULT_DEVICE_ID)
+function normalizeDeviceId(value: string): string {
+  return String(value)
     .trim()
     .replace(/:/g, '-')
     .replace(/[^A-Za-z0-9._-]/g, '-')
     .replace(/-+/g, '-')
     .slice(0, 80);
-
-  return normalized || DEFAULT_DEVICE_ID;
 }
+
+/**
+ * Resolve the lomo login device id for this client.
+ *
+ * lomo-backend stores exactly one token per (user, device); a second login on
+ * the SAME device REPLACES the first login's token (see updateOrInsertToken in
+ * lomo-backend). So every distinct client — the desktop webview, each browser,
+ * mobile — must have its own device id; otherwise logging in from a browser
+ * silently invalidates the desktop app's token and the app starts 401'ing on
+ * every request.
+ *
+ * Priority: explicit override (header/body) > persisted per-client cookie >
+ * freshly generated id. The resolved id is written back to the httpOnly
+ * `lomo_device` cookie (when not an explicit override) so the same client reuses
+ * it across logins/relaunches — keeping the token stable and avoiding
+ * device-table bloat. Separate cookie jars (webview vs each browser) get
+ * separate ids automatically.
+ */
+function resolveLoginDevice(req: any): { deviceId: string; persist: boolean } {
+  const rawOverride = req.headers['x-lomo-device'] || req.body?.deviceId || req.body?.deviceName;
+  const override = Array.isArray(rawOverride) ? rawOverride[0] : rawOverride;
+  if (override) {
+    return { deviceId: normalizeDeviceId(override) || DEFAULT_DEVICE_ID, persist: false };
+  }
+
+  const cookieDevice = req.cookies?.lomo_device;
+  if (cookieDevice) {
+    const id = normalizeDeviceId(cookieDevice);
+    if (id) {
+      return { deviceId: id, persist: true };
+    }
+  }
+
+  // No identity yet for this client — mint a unique one.
+  return { deviceId: `${DEFAULT_DEVICE_ID}-${randomBytes(4).toString('hex')}`, persist: true };
+}
+
+const DEVICE_COOKIE_MAX_AGE = 10 * 365 * 24 * 60 * 60 * 1000; // ~10 years
 
 // POST /api/auth/login
 authRouter.post('/login', async (req, res) => {
@@ -70,7 +105,7 @@ authRouter.post('/login', async (req, res) => {
     const { email, password } = req.body;
     const username = email; // Immich uses email, lomo uses username
     const serverUrl = (req.headers['x-lomo-server'] as string) || DEFAULT_LOMO_URL;
-    const deviceId = getLoginDeviceId(req);
+    const { deviceId, persist: persistDevice } = resolveLoginDevice(req);
 
     console.log(`[auth] Login attempt: user=${username}, server=${serverUrl}, device=${deviceId}`);
 
@@ -102,6 +137,12 @@ authRouter.post('/login', async (req, res) => {
     res.cookie('immich_is_authenticated', 'true', { path: '/', httpOnly: false });
     res.cookie('immich_auth_type', 'password', { path: '/', httpOnly: false });
     res.cookie('lomo_session', sessionId, { path: '/', httpOnly: true });
+
+    // Persist this client's device identity so re-logins reuse the same lomo
+    // token row instead of colliding with (and evicting) other clients' tokens.
+    if (persistDevice) {
+      res.cookie('lomo_device', deviceId, { path: '/', httpOnly: true, maxAge: DEVICE_COOKIE_MAX_AGE });
+    }
 
     // Return Immich LoginResponseDto format (SDK expects 201)
     res.status(201).json({
