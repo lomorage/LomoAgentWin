@@ -382,6 +382,54 @@ fn startup_html() -> &'static str {
 </html>"#
 }
 
+/// Create the main window in code (instead of tauri.conf.json) so we can
+/// attach an `on_download` handler — downloads then prompt the user with a
+/// native "Save As" dialog instead of silently writing to the Downloads dir.
+fn create_main_window(app: &tauri::App) -> Option<tauri::WebviewWindow> {
+    tauri::WebviewWindowBuilder::new(
+        app,
+        "main",
+        tauri::WebviewUrl::External("http://localhost:3001".parse().ok()?),
+    )
+    .title("lomorage")
+    .inner_size(1280.0, 800.0)
+    .visible(false)
+    .resizable(true)
+    .devtools(true)
+    .on_download(|webview, event| {
+        if let tauri::webview::DownloadEvent::Requested { url, destination } = event {
+            eprintln!(
+                "[tauri] download requested: url={} suggested={}",
+                url,
+                destination.display()
+            );
+            let suggested = destination
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "download".to_string());
+            let dialog = rfd::FileDialog::new()
+                .set_title("Save file")
+                .set_file_name(&suggested)
+                .set_parent(&webview.window());
+            return match dialog.save_file() {
+                Some(path) => {
+                    eprintln!("[tauri] download destination chosen: {}", path.display());
+                    *destination = path;
+                    true
+                }
+                // User cancelled the dialog — abort the download.
+                None => {
+                    eprintln!("[tauri] download cancelled by user");
+                    false
+                }
+            };
+        }
+        true
+    })
+    .build()
+    .ok()
+}
+
 fn create_startup_window(app: &tauri::App) -> Option<tauri::WebviewWindow> {
     let url = format!(
         "data:text/html;charset=utf-8,{}",
@@ -420,66 +468,6 @@ fn wait_for_proxy_ready(port: u16, timeout: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(120));
     }
     false
-}
-
-fn http_get(host: &str, port: u16, path: &str) -> io::Result<String> {
-    use std::io::Write;
-
-    let mut stream = TcpStream::connect((host, port))?;
-    stream
-        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-        .ok();
-
-    let request = format!(
-        "GET {} HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\n\r\n",
-        path, host, port
-    );
-    stream.write_all(request.as_bytes())?;
-
-    let mut response = String::new();
-    stream.read_to_string(&mut response).ok();
-
-    let mut parts = response.splitn(2, "\r\n\r\n");
-    let head = parts.next().unwrap_or_default();
-    let body = parts.next().unwrap_or_default();
-
-    let status = head
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|code| code.parse::<u16>().ok())
-        .unwrap_or(0);
-    if !(200..300).contains(&status) {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("HTTP GET {} returned {}", path, status),
-        ));
-    }
-
-    Ok(body.to_string())
-}
-
-fn browser_access_url(start_path: &str) -> Option<String> {
-    #[derive(serde::Deserialize)]
-    struct BrowserAccessLink {
-        url: String,
-    }
-
-    let endpoint = format!(
-        "/api/lomo/browser-access-link?path={}",
-        percent_encode_data_url(start_path)
-    );
-
-    match http_get("127.0.0.1", 3001, &endpoint).and_then(|body| {
-        serde_json::from_str::<BrowserAccessLink>(&body)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
-    }) {
-        Ok(link) => Some(link.url),
-        Err(error) => {
-            eprintln!("[tauri] Failed to resolve browser access URL: {}", error);
-            None
-        }
-    }
 }
 
 fn open_default_browser(url: &str) -> io::Result<()> {
@@ -624,12 +612,6 @@ fn run_startup(
 
         #[cfg(debug_assertions)]
         main.open_devtools();
-    }
-
-    let browser_url = browser_access_url(start_path).unwrap_or_else(|| start_url.clone());
-    println!("[tauri] Opening browser at {}", browser_url);
-    if let Err(error) = open_default_browser(&browser_url) {
-        eprintln!("[tauri] Failed to open browser: {}", error);
     }
 
     update_startup_progress(&app, 100, "Ready");
@@ -2307,9 +2289,7 @@ fn main() {
                 _tray_icon: tray_icon,
             });
 
-            if let Some(main) = app.get_webview_window("main") {
-                let _ = main.hide();
-            }
+            create_main_window(app);
             create_startup_window(app);
 
             let app_handle = app.handle().clone();

@@ -471,6 +471,31 @@ stubsRouter.get('/lomo/settings', (_req, res) => {
   res.json(readConfig());
 });
 
+// GET /api/lomo/version
+stubsRouter.get('/lomo/version', async (req, res) => {
+  const auth = getLomoToken(req);
+  if (!auth) {
+    return res.status(401).json({ message: 'Not authenticated' });
+  }
+
+  try {
+    const lomoRes = await lomoFetch(`${auth.serverUrl}/system?token=${encodeURIComponent(auth.token)}`);
+    if (!lomoRes.ok) {
+      return res.status(502).json({ message: `Lomod returned ${lomoRes.status}` });
+    }
+
+    const system = await lomoRes.json() as { LomodVersion?: unknown };
+    if (typeof system.LomodVersion !== 'string' || !system.LomodVersion.trim()) {
+      return res.status(502).json({ message: 'Lomod version is unavailable' });
+    }
+
+    res.json({ version: system.LomodVersion.trim() });
+  } catch (error) {
+    console.error('[version] Failed to read lomod version:', error);
+    res.status(502).json({ message: 'Failed to read lomod version' });
+  }
+});
+
 // GET /api/lomo/browser-access-link
 stubsRouter.get('/lomo/browser-access-link', (req, res) => {
   const port = Number(process.env.PROXY_PORT || 3001);

@@ -778,6 +778,32 @@ async function setFavorite(serverUrl: string, token: string, ids: string[], isFa
   return true;
 }
 
+function parseLomoAssetDate(value: unknown): { year: number; month: number; day: number } | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})(T.*)?$/.exec(trimmed);
+  if (!match) {
+    return null;
+  }
+  if (match[4] && Number.isNaN(Date.parse(trimmed))) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() + 1 !== month || date.getUTCDate() !== day) {
+    return null;
+  }
+
+  return { year, month, day };
+}
+
 // PUT /api/assets (bulk update — handles isFavorite)
 assetsRouter.put('/', async (req, res) => {
   const auth = getLomoToken(req);
@@ -806,7 +832,7 @@ assetsRouter.put('/', async (req, res) => {
   }
 });
 
-// PUT /api/assets/:id (single asset update — handles isFavorite)
+// PUT /api/assets/:id (single asset update)
 assetsRouter.put('/:id', async (req, res) => {
   const auth = getLomoToken(req);
   if (!auth) {
@@ -816,13 +842,47 @@ assetsRouter.put('/:id', async (req, res) => {
   const assetName = req.params.id;
 
   try {
-    const { isFavorite } = req.body as { isFavorite?: boolean };
+    const { isFavorite, dateTimeOriginal } = req.body as {
+      isFavorite?: boolean;
+      dateTimeOriginal?: string;
+    };
 
     if (isFavorite !== undefined) {
       const ok = await setFavorite(auth.serverUrl, auth.token, [assetName], isFavorite);
       if (!ok) {
         return res.status(500).json({ message: 'Failed to update favorite' });
       }
+      clearAlbumBucketCache();
+    }
+
+    if (dateTimeOriginal !== undefined) {
+      const date = parseLomoAssetDate(dateTimeOriginal);
+      if (!date) {
+        return res.status(400).json({ message: 'Invalid asset date' });
+      }
+
+      const metadataRes = await lomoFetch(
+        `${auth.serverUrl}/asset/metadata/${encodeURIComponent(assetName)}?token=${auth.token}`,
+      );
+      if (!metadataRes.ok) {
+        return res.status(metadataRes.status).json({ message: 'Asset not found' });
+      }
+
+      const metadata = await metadataRes.json() as { Hash?: string };
+      if (!metadata.Hash) {
+        return res.status(502).json({ message: 'Asset hash is unavailable' });
+      }
+
+      const updateRes = await lomoFetch(
+        `${auth.serverUrl}/asset/${encodeURIComponent(metadata.Hash)}/${date.year}/${date.month}/${date.day}?token=${auth.token}`,
+        { method: 'PUT' },
+      );
+      if (!updateRes.ok) {
+        const errorText = await updateRes.text();
+        console.error(`[assets] date update failed for ${assetName}: ${updateRes.status} ${errorText}`);
+        return res.status(updateRes.status).json({ message: 'Failed to update asset date' });
+      }
+
       clearAlbumBucketCache();
     }
 

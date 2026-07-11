@@ -1,24 +1,14 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicktomlin/tauri/refs/heads/dev/.schema/config.schema.json",
   "productName": "lomorage",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "identifier": "com.lomoware.photoviewer",
   "build": {
     "devUrl": "http://localhost:3001",
     "frontendDist": "http://localhost:3001"
   },
   "app": {
-    "windows": [
-      {
-        "title": "lomorage",
-        "width": 1280,
-        "height": 800,
-        "visible": false,
-        "resizable": true,
-        "fullscreen": false,
-        "devtools": true
-      }
-    ],
+    "windows": [],
     "withGlobalTauri": true,
     "security": {
       "csp": null
