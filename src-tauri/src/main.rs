@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backup_watch;
+mod lid_power;
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::io::{self, Read as _};
@@ -12,7 +13,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
@@ -26,6 +27,7 @@ const TRAY_ID: &str = "main-tray";
 const TRAY_SHOW_APP_ID: &str = "tray-show-app";
 const TRAY_QUIT_ID: &str = "tray-quit";
 const TRAY_SLEEP_HINT_ID: &str = "tray-sleep-hint";
+const TRAY_LID_BACKUP_ID: &str = "tray-lid-backup";
 const TRAY_ICON: tauri::image::Image<'_> = tauri::include_image!("./icons/icon.ico");
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, Default)]
@@ -60,6 +62,9 @@ struct AppConfig {
     remote: RemoteBackendConfig,
     #[serde(default)]
     welcome_shown: bool,
+    /// Keep phone backups running with the lid closed while plugged in (tray toggle).
+    #[serde(default)]
+    lid_closed_backup: bool,
     #[serde(default)]
     #[serde(skip_serializing)]
     photos_dir: String,
@@ -1574,13 +1579,14 @@ fn quit_from_tray(app: &tauri::AppHandle) {
     if let Some(state) = app.try_state::<Mutex<AppState>>() {
         let mut state = state.lock().unwrap();
         kill_processes(&mut state);
+        lid_power::restore_lid_action(&state.data_dir);
     }
 
     app.exit(0);
 }
 
 /// Tray menu; when this PC is the backup server (`local_server`), it leads with a
-/// disabled hint that sleep pauses phone backups.
+/// disabled hint that sleep pauses phone backups and the lid-closed backup toggle.
 fn build_tray_menu<R: tauri::Runtime, M: Manager<R>>(
     manager: &M,
     local_server: bool,
@@ -1598,8 +1604,19 @@ fn build_tray_menu<R: tauri::Runtime, M: Manager<R>>(
         false,
         None::<&str>,
     )?;
+    let lid_backup = CheckMenuItem::with_id(
+        manager,
+        TRAY_LID_BACKUP_ID,
+        backup_watch::LID_BACKUP_LABEL,
+        true,
+        backup_watch::LID_BACKUP_ENABLED.load(std::sync::atomic::Ordering::Relaxed),
+        None::<&str>,
+    )?;
     let separator = PredefinedMenuItem::separator(manager)?;
-    Menu::with_items(manager, &[&sleep_hint, &separator, &show_app, &quit])
+    Menu::with_items(
+        manager,
+        &[&sleep_hint, &lid_backup, &separator, &show_app, &quit],
+    )
 }
 
 fn create_tray_icon(app: &mut tauri::App) -> tauri::Result<TrayIcon> {
@@ -1613,6 +1630,7 @@ fn create_tray_icon(app: &mut tauri::App) -> tauri::Result<TrayIcon> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             TRAY_SHOW_APP_ID => show_main_window(app),
             TRAY_QUIT_ID => quit_from_tray(app),
+            TRAY_LID_BACKUP_ID => backup_watch::toggle_lid_backup(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| match event {
@@ -2351,6 +2369,7 @@ fn main() {
                 if let Some(state) = window.app_handle().try_state::<Mutex<AppState>>() {
                     let mut state = state.lock().unwrap();
                     kill_processes(&mut state);
+                    lid_power::restore_lid_action(&state.data_dir);
                 }
             }
             _ => {}

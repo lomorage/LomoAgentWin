@@ -4,18 +4,21 @@
 //! backup in progress. This watcher:
 //! - shows a tray hint / tooltip that backups pause while the PC sleeps,
 //! - keeps the PC from idle-sleeping while a phone is connected,
+//! - optionally (tray toggle, AC power only) keeps it awake with the lid closed,
 //! - nudges the user once per run when a phone backup starts,
 //! - tells the user after wake-up if the PC slept during a backup.
 //!
-//! Lid-close and manual sleep can't be prevented by an app, which is why the
-//! warnings are still needed alongside the idle-sleep block.
+//! Manual sleep (Start > Sleep) and low-battery sleep can't be prevented by an
+//! app, which is why the warnings are still needed.
 
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_notification::NotificationExt;
 
+use crate::lid_power;
 use crate::{build_tray_menu, AppState, LOMOD_PORT, PROXY_PORT, TRAY_ID};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
@@ -28,19 +31,34 @@ const ACTIVE_POLLS_FOR_BACKUP: u32 = 2;
 const PHONE_PORTS: [u16; 2] = [LOMOD_PORT, PROXY_PORT];
 
 pub const SLEEP_HINT: &str = "Backup pauses when this PC sleeps — keep it awake during the first backup";
+pub const LID_BACKUP_LABEL: &str = "Keep backing up with the lid closed (plugged in)";
 const TOOLTIP_REMOTE: &str = "lomorage";
 const TOOLTIP_LOCAL: &str = "lomorage — backup pauses when this PC sleeps";
 const TOOLTIP_BACKING_UP: &str = "lomorage — phone connected, keep this PC awake until backup finishes";
+const TOOLTIP_LID_CLOSED_OK: &str = "lomorage — phone backup running, OK to close the lid while plugged in";
+
+/// Tray toggle for lid-closed backup; persisted as `lid_closed_backup` in config.json.
+pub static LID_BACKUP_ENABLED: AtomicBool = AtomicBool::new(false);
 
 pub fn spawn(app: AppHandle) {
     std::thread::spawn(move || run(app));
 }
 
 fn run(app: AppHandle) {
+    let data_dir = app.path().app_data_dir().ok();
+    if let Some(data_dir) = &data_dir {
+        // Undo a lid override left behind by a crash or forced shutdown.
+        lid_power::restore_lid_action(data_dir);
+        let enabled = crate::load_config(data_dir).is_some_and(|c| c.lid_closed_backup);
+        LID_BACKUP_ENABLED.store(enabled, Ordering::Relaxed);
+    }
+
     let mut last_local: Option<bool> = None;
     let mut last_tooltip = "";
     let mut active_polls = 0u32;
     let mut nudged = false;
+    let mut keep_awake = false;
+    let mut lid_overridden = false;
     let mut last_wall = SystemTime::now();
 
     loop {
@@ -74,27 +92,53 @@ fn run(app: AppHandle) {
         let phone_connected = local && phone_connection_count() > 0;
         active_polls = if phone_connected { active_polls.saturating_add(1) } else { 0 };
         let backing_up = active_polls >= ACTIVE_POLLS_FOR_BACKUP;
-
         if backing_up != backing_up_before {
-            set_keep_awake(backing_up);
-            println!(
-                "[tauri] Phone backup {}; idle sleep {}",
-                if backing_up { "detected" } else { "idle" },
-                if backing_up { "blocked" } else { "allowed" }
-            );
+            println!("[tauri] Phone backup {}", if backing_up { "detected" } else { "idle" });
         }
+
+        let lid_opt_in = LID_BACKUP_ENABLED.load(Ordering::Relaxed);
+        let (want_lid, want_awake) = power_plan(backing_up, lid_opt_in, lid_power::on_ac_power());
+        if want_awake != keep_awake {
+            set_keep_awake(want_awake);
+            keep_awake = want_awake;
+            println!("[tauri] Idle sleep {}", if want_awake { "blocked" } else { "allowed" });
+        }
+        if want_lid != lid_overridden {
+            if let Some(data_dir) = &data_dir {
+                if want_lid {
+                    if !lid_power::override_lid_action(data_dir) {
+                        eprintln!("[tauri] Failed to override lid close action");
+                    }
+                } else {
+                    lid_power::restore_lid_action(data_dir);
+                }
+            }
+            lid_overridden = want_lid;
+        }
+
         if backing_up && !nudged {
             nudged = true;
-            notify(
-                &app,
-                "Phone backup in progress",
-                "Keep this PC awake and the lid open until the backup finishes — backups pause \
-                 while the PC sleeps.",
-            );
+            if lid_overridden {
+                notify(
+                    &app,
+                    "Phone backup in progress",
+                    "You can close the lid while this PC stays plugged in — the backup keeps \
+                     going. Unplugging or choosing Sleep pauses it.",
+                );
+            } else {
+                notify(
+                    &app,
+                    "Phone backup in progress",
+                    "Keep this PC awake and the lid open until the backup finishes — backups \
+                     pause while the PC sleeps.",
+                );
+            }
         }
 
         let tooltip = if !local {
             TOOLTIP_REMOTE
+        } else if lid_overridden {
+            TOOLTIP_LID_CLOSED_OK
         } else if backing_up {
             TOOLTIP_BACKING_UP
         } else {
@@ -109,6 +153,49 @@ fn run(app: AppHandle) {
 
         std::thread::sleep(POLL_INTERVAL);
     }
+}
+
+/// Returns `(override lid action, block idle sleep)` for this tick.
+fn power_plan(backing_up: bool, lid_opt_in: bool, on_ac: bool) -> (bool, bool) {
+    let override_lid = backing_up && lid_opt_in && on_ac;
+    // With lid-closed backup enabled the lid may be shut, so on battery let
+    // Windows sleep normally rather than keep running in a closed bag.
+    let keep_awake = backing_up && (on_ac || !lid_opt_in);
+    (override_lid, keep_awake)
+}
+
+/// Tray handler for the lid-closed backup toggle.
+pub fn toggle_lid_backup(app: &AppHandle) {
+    let enable = !LID_BACKUP_ENABLED.load(Ordering::Relaxed);
+    if enable && !confirm_lid_backup() {
+        // Re-sync the check mark the menu already flipped.
+        refresh_tray_menu(app, true);
+        return;
+    }
+    LID_BACKUP_ENABLED.store(enable, Ordering::Relaxed);
+
+    if let Ok(data_dir) = app.path().app_data_dir() {
+        let mut config = crate::get_app_config(&data_dir);
+        config.lid_closed_backup = enable;
+        if let Err(e) = crate::save_config(&data_dir, &config) {
+            eprintln!("[tauri] Failed to save lid_closed_backup: {}", e);
+        }
+    }
+    refresh_tray_menu(app, true);
+}
+
+fn confirm_lid_backup() -> bool {
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Info)
+        .set_title("Keep backing up with the lid closed?")
+        .set_description(
+            "While a phone is backing up and this PC is plugged in, closing the lid won't put it \
+             to sleep. Your usual lid setting comes back as soon as the backup finishes or you \
+             unplug.\n\nDon't put the laptop in a bag while it's closed and still running.",
+        )
+        .set_buttons(rfd::MessageButtons::OkCancel)
+        .show()
+        == rfd::MessageDialogResult::Ok
 }
 
 /// `Some(true)` when this PC runs lomod; `None` if the state is unavailable
@@ -209,6 +296,16 @@ fn split_endpoint(endpoint: &str) -> Option<(IpAddr, u16)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lid_override_only_on_ac_when_opted_in() {
+        // (backing_up, opt_in, on_ac) -> (override_lid, keep_awake)
+        assert_eq!(power_plan(false, true, true), (false, false));
+        assert_eq!(power_plan(true, false, true), (false, true));
+        assert_eq!(power_plan(true, false, false), (false, true));
+        assert_eq!(power_plan(true, true, true), (true, true));
+        assert_eq!(power_plan(true, true, false), (false, false));
+    }
 
     #[test]
     fn counts_only_lan_connections_to_phone_ports() {

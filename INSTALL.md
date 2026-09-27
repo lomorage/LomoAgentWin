@@ -63,7 +63,9 @@ Follow the on-screen setup to select a photos folder and create an admin passwor
 
 In **This machine** mode, phones back up to this computer over Wi-Fi, so backups pause whenever it sleeps (closing a laptop lid, idle timeout, or choosing **Sleep**). Keep the computer on, plugged in, and awake — lid open — until the first large backup finishes.
 
-While a phone is connected, the app keeps Windows from sleeping on its idle timer, and it shows a notification if the computer slept during a backup. It cannot stop sleep that you trigger by closing the lid or choosing **Sleep**. The tray menu shows the same reminder.
+While a phone is connected, the app keeps Windows from sleeping on its idle timer, and it shows a notification if the computer slept during a backup. The tray menu shows the same reminder.
+
+On a laptop you can turn on **Keep backing up with the lid closed (plugged in)** in the tray menu. While a phone is backing up and the laptop is plugged in, closing the lid then won't put it to sleep; your usual lid setting comes back as soon as the backup finishes or you unplug. A computer that is actually asleep can't receive backups, so choosing **Sleep**, unplugging with the lid closed, or a low battery still pauses the backup.
 
 ---
 
