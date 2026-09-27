@@ -1,6 +1,8 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod backup_watch;
+
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::io::{self, Read as _};
 use std::net::TcpStream;
@@ -10,15 +12,20 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+const LOMOD_PORT: u16 = 8000;
+const PROXY_PORT: u16 = 3001;
+
+const TRAY_ID: &str = "main-tray";
 const TRAY_SHOW_APP_ID: &str = "tray-show-app";
 const TRAY_QUIT_ID: &str = "tray-quit";
+const TRAY_SLEEP_HINT_ID: &str = "tray-sleep-hint";
 const TRAY_ICON: tauri::image::Image<'_> = tauri::include_image!("./icons/icon.ico");
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, Default)]
@@ -1268,7 +1275,7 @@ fn start_lomod(
         "--exe-dir",
         &path_str(&lomod_dir),
         "--port",
-        "8000",
+        &LOMOD_PORT.to_string(),
         "--admin-token",
         "123456",
     ]);
@@ -1572,12 +1579,33 @@ fn quit_from_tray(app: &tauri::AppHandle) {
     app.exit(0);
 }
 
-fn create_tray_icon(app: &mut tauri::App) -> tauri::Result<TrayIcon> {
-    let show_app = MenuItem::with_id(app, TRAY_SHOW_APP_ID, "Show App", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_app, &quit])?;
+/// Tray menu; when this PC is the backup server (`local_server`), it leads with a
+/// disabled hint that sleep pauses phone backups.
+fn build_tray_menu<R: tauri::Runtime, M: Manager<R>>(
+    manager: &M,
+    local_server: bool,
+) -> tauri::Result<Menu<R>> {
+    let show_app = MenuItem::with_id(manager, TRAY_SHOW_APP_ID, "Show App", true, None::<&str>)?;
+    let quit = MenuItem::with_id(manager, TRAY_QUIT_ID, "Quit", true, None::<&str>)?;
+    if !local_server {
+        return Menu::with_items(manager, &[&show_app, &quit]);
+    }
 
-    let tray_icon = TrayIconBuilder::with_id("main-tray")
+    let sleep_hint = MenuItem::with_id(
+        manager,
+        TRAY_SLEEP_HINT_ID,
+        backup_watch::SLEEP_HINT,
+        false,
+        None::<&str>,
+    )?;
+    let separator = PredefinedMenuItem::separator(manager)?;
+    Menu::with_items(manager, &[&sleep_hint, &separator, &show_app, &quit])
+}
+
+fn create_tray_icon(app: &mut tauri::App) -> tauri::Result<TrayIcon> {
+    let menu = build_tray_menu(app, false)?;
+
+    let tray_icon = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .icon(TRAY_ICON)
         .tooltip("lomorage")
@@ -2261,6 +2289,7 @@ fn purge_webview_cache_if_schema_changed() {
 fn main() {
     purge_webview_cache_if_schema_changed();
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             get_app_settings,
             open_external_url,
@@ -2291,6 +2320,7 @@ fn main() {
 
             create_main_window(app);
             create_startup_window(app);
+            backup_watch::spawn(app.handle().clone());
 
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {

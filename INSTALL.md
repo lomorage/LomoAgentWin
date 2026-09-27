@@ -59,6 +59,12 @@ On first launch the app will ask you to choose a storage mode:
 
 Follow the on-screen setup to select a photos folder and create an admin password.
 
+### Keep the computer awake for the first backup
+
+In **This machine** mode, phones back up to this computer over Wi-Fi, so backups pause whenever it sleeps (closing a laptop lid, idle timeout, or choosing **Sleep**). Keep the computer on, plugged in, and awake — lid open — until the first large backup finishes.
+
+While a phone is connected, the app keeps Windows from sleeping on its idle timer, and it shows a notification if the computer slept during a backup. It cannot stop sleep that you trigger by closing the lid or choosing **Sleep**. The tray menu shows the same reminder.
+
 ---
 
 ## Uninstall
