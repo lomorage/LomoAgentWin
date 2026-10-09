@@ -127,6 +127,11 @@ jobs:
           if (-not $proxyExe) { throw "installed app not found (no proxy.exe under LOCALAPPDATA or Program Files)" }
           $installDir = $proxyExe.DirectoryName
           if (-not (Test-Path "$installDir\lomod\lomod.exe")) { throw "lomod\lomod.exe missing from $installDir" }
+          # lomod shells out to these; exiftool also needs its exiftool_files\ tree intact next to it
+          & "$installDir\lomod\exiftool.exe" -ver
+          if ($LASTEXITCODE -ne 0) { throw "bundled exiftool.exe does not run" }
+          & "$installDir\lomod\ffmpeg.exe" -hide_banner -version | Select-Object -First 1
+          if ($LASTEXITCODE -ne 0) { throw "bundled ffmpeg.exe does not run" }
           $appExe = Get-ChildItem $installDir -Filter *.exe |
             Where-Object { $_.Name -notin @("proxy.exe", "uninstall.exe") } | Select-Object -First 1
           if (-not $appExe) { throw "app executable not found in $installDir" }
