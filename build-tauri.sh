@@ -63,7 +63,9 @@ if [ "$SKIP_WEB" = false ]; then
   cd "$SCRIPT_DIR/submodules/immich/web"
 
   echo "Installing dependencies..."
-  pnpm install --force
+  # engine-strict=false: web/.npmrc turns it on, which makes pnpm fail on Windows over
+  # exiftool-vendored.pl (os: !win32), a dependency of server/e2e that the web app never uses.
+  pnpm install --force --config.engine-strict=false
 
   # CRITICAL: clean both build/ and .svelte-kit/ to prevent stale cache
   # The web app imports @immich/sdk from its compiled build/ dir, which a fresh clone lacks

@@ -76,6 +76,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          cache-on-failure: true # keep the compiled tauri-cli even when a later step fails
 
       - name: Install tauri-cli
         run: |

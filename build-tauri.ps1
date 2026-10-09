@@ -59,8 +59,10 @@ if (-not $SkipWeb) {
         Write-Host "Dependencies already installed; skipping pnpm install."
     } else {
         Write-Host "Installing dependencies..."
-        # Only the web app and its workspace dependencies (@immich/sdk), not the whole monorepo
-        pnpm install --filter "immich-web..."
+        # Only the web app and its workspace dependencies (@immich/sdk), not the whole monorepo.
+        # engine-strict=false: web/.npmrc turns it on, which makes pnpm fail on Windows over
+        # exiftool-vendored.pl (os: !win32), a dependency of server/e2e that the web app never uses.
+        pnpm install --filter "immich-web..." --config.engine-strict=false
         if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
     }
 
