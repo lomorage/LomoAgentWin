@@ -1,7 +1,10 @@
-# Builds the Windows installers (NSIS setup.exe + MSI) from source: the Immich web frontend
+# Builds the Windows installer (NSIS setup.exe) from source: the Immich web frontend
 # (submodules/immich), the proxy (proxy/), lomod (submodules/lomod) and the Tauri shell.
 #
-# Every run uploads the installers as a workflow artifact. Pushing a tag vX.Y.Z (matching
+# The MSI isn't built here: WiX's light.exe fails on the hosted runner, and releases only
+# ship the NSIS installer anyway (install.ps1 and publish-release-assets.ps1 use *setup.exe).
+#
+# Every run uploads the installer as a workflow artifact. Pushing a tag vX.Y.Z (matching
 # "version" in src-tauri/tauri.conf.json) also creates a *draft* GitHub Release with the
 # installers and install.ps1 attached; publish it by hand once checked, since install.ps1
 # installs whatever the latest published release is.
@@ -98,15 +101,13 @@ jobs:
 
       # ---- web + proxy + Tauri ----
       - name: Build installers
-        run: ./build-tauri.ps1
+        run: ./build-tauri.ps1 -Bundles nsis
 
       - name: Upload installers
         uses: actions/upload-artifact@v7
         with:
           name: lomoagent-windows-${{ steps.version.outputs.version }}
-          path: |
-            src-tauri/target/release/bundle/nsis/*-setup.exe
-            src-tauri/target/release/bundle/msi/*.msi
+          path: src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
 
       - name: Draft GitHub Release
@@ -116,5 +117,4 @@ jobs:
           draft: true
           files: |
             src-tauri/target/release/bundle/nsis/*-setup.exe
-            src-tauri/target/release/bundle/msi/*.msi
             install.ps1

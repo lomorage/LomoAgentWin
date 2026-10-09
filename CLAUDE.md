@@ -31,7 +31,7 @@ Build steps in order:
 **Prerequisite**: `src-tauri/resources/lomod/lomod.exe` must exist. Either build it from `submodules/lomod` with `.\build-tauri.ps1 -BuildLomod` (runs `scripts/build-lomod-windows.ps1`; needs `go` and a mingw-w64 **UCRT** toolchain on PATH, e.g. MSYS2 UCRT64 — see the script header), or extract it from `lomoagent.msi`.
 
 ### CI
-`.github/workflows/build-windows.yml` builds everything (lomod included) on `windows-latest` on pushes to `main` / `claude/**`, PRs and manual runs, and uploads the NSIS + MSI installers as a workflow artifact. Pushing a tag `vX.Y.Z` that matches `version` in `src-tauri/tauri.conf.json` also creates a **draft** GitHub Release with the installers and `install.ps1`; publish it manually.
+`.github/workflows/build-windows.yml` builds everything (lomod included) on `windows-latest` on pushes to `main` / `claude/**`, PRs and manual runs, and uploads the NSIS installer as a workflow artifact (MSI is skipped in CI: WiX's `light.exe` fails on the hosted runner; `.\build-tauri.ps1 -Bundles nsis` does the same locally). Pushing a tag `vX.Y.Z` that matches `version` in `src-tauri/tauri.conf.json` also creates a **draft** GitHub Release with the installer and `install.ps1`; publish it manually.
 
 `submodules/immich` (fork `lomolomo2/immich`) and `submodules/lomod` (`lomorage/lomod`, the lomo-backend server source) are git submodules tracking `main`; after cloning run `git submodule update --init submodules/immich submodules/lomod` (`git submodule update --remote <path>` pulls the latest `main`). After pushing changes in either, commit the updated submodule pointer here so each release records the commits it was built from.
 

@@ -14,6 +14,8 @@ param(
     [switch]$SkipProxy,
     [switch]$DevBuild,
     [switch]$BuildLomod,
+    # Comma-separated Tauri bundle targets (e.g. "nsis"); default: all in tauri.conf.json
+    [string]$Bundles = "",
     [switch]$Help
 )
 
@@ -32,6 +34,7 @@ Options:
   -DevBuild     Build in debug mode (faster, no installer)
   -BuildLomod   Build lomod from submodules/lomod into src-tauri/resources/lomod/
                 (scripts/build-lomod-windows.ps1; needs go + a mingw-w64 UCRT toolchain)
+  -Bundles      Only build these installer types, e.g. -Bundles nsis (default: nsis + msi)
   -Help         Show this help message
 
 Prerequisites:
@@ -183,13 +186,15 @@ if (Test-Path $lomodExe) {
 Write-Host "`n--- Step 4: Building Tauri application ---" -ForegroundColor Yellow
 Push-Location "$ScriptDir"
 
+$tauriArgs = @()
+if ($DevBuild) { $tauriArgs += "--debug" }
+if ($Bundles) { $tauriArgs += @("--bundles", $Bundles) }
 if ($DevBuild) {
     Write-Host "Building in debug mode..."
-    cargo tauri build --debug
 } else {
     Write-Host "Building release..."
-    cargo tauri build
 }
+cargo tauri build @tauriArgs
 if ($LASTEXITCODE -ne 0) { throw "Tauri build failed" }
 
 Pop-Location
