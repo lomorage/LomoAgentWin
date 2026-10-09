@@ -9,7 +9,50 @@
 
 目前提供 `linux/amd64`（x86_64）镜像。
 
-## 快速开始
+## 快速开始：一条命令安装
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lomorage/LomoAgentWin/main/docker/install.sh | bash
+```
+
+脚本会依次完成：
+
+1. 检查环境（Linux x86_64、所需端口是否空闲）
+2. 没装 Docker 就用官方脚本装上
+3. 在 `~/lomo` 下生成 `docker-compose.yml` 和 `.env`
+4. 拉取镜像并启动
+5. 最后打印访问地址和首个账号的密码：
+
+```
+  Lomo Photo Viewer is running.
+
+  Web app (computer or phone browser):  http://192.168.1.20:3001
+  Lomorage mobile app server address:   http://192.168.1.20:8000
+  Account:  user: admin   password: 3kQf9xV2mTpA   (also in ~/lomo/data/admin-password.txt)
+```
+
+**可选设置**：通过环境变量传给脚本，例如把照片放到大硬盘上、自己指定密码：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lomorage/LomoAgentWin/main/docker/install.sh \
+  | LOMO_PHOTOS_DIR=/mnt/disk/photos LOMO_ADMIN_PASSWORD='你的密码' bash
+```
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `LOMO_DIR` | `~/lomo` | 安装目录（compose 文件、`.env`） |
+| `LOMO_PHOTOS_DIR` | `$LOMO_DIR/photos` | 照片存放位置 |
+| `LOMO_DATA_DIR` | `$LOMO_DIR/data` | 数据库、日志、设置 |
+| `LOMO_ADMIN_USER` / `LOMO_ADMIN_PASSWORD` | `admin` / 自动生成 | 首个账号（只在第一次启动时使用） |
+| `LOMO_IMAGE` | `ghcr.io/lomorage/lomo-photo-viewer:test` | 要运行的镜像 |
+| `TZ` | 本机时区 | 照片日期使用的时区 |
+| `LOMO_SKIP_DOCKER_INSTALL=1` | — | 没装 Docker 时报错退出，不自动安装 |
+
+**升级**：再运行一次同样的命令即可。上次的设置（照片目录等）会从 `~/lomo/.env` 里读取，照片、数据和账号都会保留。
+
+**脚本下载地址**：上面的地址在合并到 `main` 分支后才能用。在那之前，可以从 GitHub Release 页面下载 `install.sh`。
+
+## 手动用 Docker Compose 安装
 
 需要 Docker 和 Docker Compose 插件。
 
@@ -19,8 +62,6 @@ curl -fsSLO https://raw.githubusercontent.com/lomorage/LomoAgentWin/main/docker/
 docker compose up -d
 docker compose logs
 ```
-
-如果 `main` 分支上还没有这个文件，可以到 GitHub Release 页面下载 `docker-compose.yml`。
 
 第一次启动时，日志里会打印访问地址和首个账号：
 
@@ -36,7 +77,6 @@ docker compose logs
 
 - 账号密码另外保存在 `./lomo/data/admin-password.txt`
 - 不想用随机密码，就在**第一次启动之前**，把 `docker-compose.yml` 里的 `LOMO_ADMIN_PASSWORD` 填上
-- 账号只在第一次启动时创建，之后再改这个变量不会生效
 
 不用 Compose 的话，等价的命令是：
 
