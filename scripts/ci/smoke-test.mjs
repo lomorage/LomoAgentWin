@@ -9,33 +9,32 @@
 // Usage: node scripts/ci/smoke-test.mjs
 //   PROXY_URL      default http://127.0.0.1:3001
 //   LOMOD_URL      default http://127.0.0.1:8000
-//   ADMIN_HOME     directory for the admin user's photos (created if missing); required, and
-//                  like the app's own setup (complete_initial_setup) it should be <photos dir>/admin
+//   ADMIN_HOME     create the admin account first, with this directory as its photo home
+//                  (created if missing). Like the desktop app's setup (complete_initial_setup)
+//                  it should be <photos dir>/admin. Leave unset when the account already exists
+//                  (the Docker image creates it on first start) and pass SMOKE_PASSWORD instead.
+//   SMOKE_USER     account to sign in as, default admin
+//   SMOKE_PASSWORD its password; default smoke-test-password (the one ADMIN_HOME mode creates)
 //   SMOKE_TIMEOUT  seconds to wait for lomod and the proxy to come up, default 120
 //
 // Needs Node 20+ (global fetch/FormData) and proxy/node_modules installed (for hash-wasm).
-// Run by .github/workflows/build-windows.yml against the freshly installed app.
+// Run by .github/workflows/build-windows.yml against the freshly installed desktop app, and by
+// .github/workflows/docker.yml against the Docker image.
 
-import { createRequire } from 'node:module';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createLomodUser } from '../lib/lomo-credential.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const { argon2id } = createRequire(join(here, '../../proxy/package.json'))('hash-wasm');
 
 const PROXY_URL = (process.env.PROXY_URL || 'http://127.0.0.1:3001').replace(/\/$/, '');
 const LOMOD_URL = (process.env.LOMOD_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
 const ADMIN_HOME = process.env.ADMIN_HOME;
 const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT || 120) * 1000;
-const USERNAME = 'admin';
-const PASSWORD = 'smoke-test-password';
+const USERNAME = process.env.SMOKE_USER || 'admin';
+const PASSWORD = process.env.SMOKE_PASSWORD || 'smoke-test-password';
 const PHOTO = join(here, 'fixtures', 'smoke.jpg'); // 320x240 JPEG, EXIF date 2024-05-17
-
-if (!ADMIN_HOME) {
-  console.error('ADMIN_HOME is required');
-  process.exit(2);
-}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -61,25 +60,6 @@ async function waitFor(name, url) {
     await sleep(1000);
   }
   fail(`${name} did not answer ${url} within ${TIMEOUT_MS / 1000}s (last: ${lastError})`);
-}
-
-// Same credential derivation as hashPasswordForLomo in proxy/routes/auth.ts and
-// hash_password_for_lomo in src-tauri/src/main.rs, which creates the admin user in the app.
-async function lomoCredential(password, username) {
-  const salt = `${username}@lomorage.lomoware`;
-  const hashHex = await argon2id({
-    password,
-    salt: new Uint8Array(Buffer.from(salt)),
-    iterations: 3,
-    memorySize: 4096,
-    parallelism: 1,
-    hashLength: 32,
-    outputType: 'hex',
-  });
-  const saltB64 = Buffer.from(salt).toString('base64').replace(/=+$/, '');
-  const hashB64 = Buffer.from(hashHex, 'hex').toString('base64').replace(/=+$/, '');
-  const encoded = `$argon2id$v=19$m=4096,t=3,p=1$${saltB64}$${hashB64}`;
-  return `${Buffer.from(encoded, 'latin1').toString('hex')}00`;
 }
 
 let cookie = '';
@@ -126,18 +106,12 @@ async function main() {
   ok('GET /lomo-welcome serves the first-run welcome page');
 
   // 3. Create the admin account the way the app's setup does (POST /user on lomod)
-  mkdirSync(ADMIN_HOME, { recursive: true });
-  res = await fetch(`${LOMOD_URL}/user`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      Name: USERNAME,
-      Password: await lomoCredential(PASSWORD, USERNAME),
-      HomeDir: ADMIN_HOME.replace(/\\/g, '/'),
-    }),
-  });
-  await expectStatus(res, [200, 201], 'POST lomod /user');
-  ok('created the admin user');
+  if (ADMIN_HOME) {
+    mkdirSync(ADMIN_HOME, { recursive: true });
+    res = await createLomodUser(LOMOD_URL, { username: USERNAME, password: PASSWORD, homeDir: ADMIN_HOME });
+    await expectStatus(res, [200, 201], 'POST lomod /user');
+    ok(`created the ${USERNAME} user`);
+  }
 
   // 4. Sign in through the proxy
   res = await proxy('/api/auth/login', {
