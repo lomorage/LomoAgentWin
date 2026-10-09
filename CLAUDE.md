@@ -28,7 +28,10 @@ Build steps in order:
 3. Sharp native modules zipped to `src-tauri/resources/sharp.zip` (preserves directory structure — Tauri flattens resources otherwise)
 4. `cargo tauri build` (or `--debug`)
 
-**Prerequisite**: `src-tauri/resources/lomod/lomod.exe` must exist (extract from `lomoagent.msi`).
+**Prerequisite**: `src-tauri/resources/lomod/lomod.exe` must exist. Either build it from `submodules/lomod` with `.\build-tauri.ps1 -BuildLomod` (runs `scripts/build-lomod-windows.ps1`; needs `go` and a mingw-w64 **UCRT** toolchain on PATH, e.g. MSYS2 UCRT64 — see the script header), or extract it from `lomoagent.msi`.
+
+### CI
+`.github/workflows/build-windows.yml` builds everything (lomod included) on `windows-latest` on pushes to `main` / `claude/**`, PRs and manual runs, and uploads the NSIS + MSI installers as a workflow artifact. Pushing a tag `vX.Y.Z` that matches `version` in `src-tauri/tauri.conf.json` also creates a **draft** GitHub Release with the installers and `install.ps1`; publish it manually.
 
 `submodules/immich` (fork `lomolomo2/immich`) and `submodules/lomod` (`lomorage/lomod`, the lomo-backend server source) are git submodules tracking `main`; after cloning run `git submodule update --init submodules/immich submodules/lomod` (`git submodule update --remote <path>` pulls the latest `main`). After pushing changes in either, commit the updated submodule pointer here so each release records the commits it was built from.
 
@@ -38,7 +41,7 @@ After changing proxy TypeScript:
 ```bash
 cd proxy
 npx esbuild server.ts --bundle --platform=node --target=node20 --outfile=dist/server.cjs --external:sharp
-npx pkg dist/server.cjs --targets node20-win-x64 --output dist/proxy.exe
+npx pkg dist/server.cjs --targets node22-win-x64 --output dist/proxy.exe
 cp dist/proxy.exe ../src-tauri/target/debug/proxy.exe
 ```
 

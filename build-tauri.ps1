@@ -6,12 +6,14 @@
 #   .\build-tauri.ps1 -SkipWeb     # Skip web frontend rebuild
 #   .\build-tauri.ps1 -SkipProxy   # Skip proxy rebuild
 #   .\build-tauri.ps1 -DevBuild    # Debug build (faster, no installer)
+#   .\build-tauri.ps1 -BuildLomod  # Also build lomod from submodules/lomod
 # ============================================================
 
 param(
     [switch]$SkipWeb,
     [switch]$SkipProxy,
     [switch]$DevBuild,
+    [switch]$BuildLomod,
     [switch]$Help
 )
 
@@ -28,6 +30,8 @@ Options:
   -SkipWeb      Skip rebuilding the Immich web frontend
   -SkipProxy    Skip rebuilding the proxy executable
   -DevBuild     Build in debug mode (faster, no installer)
+  -BuildLomod   Build lomod from submodules/lomod into src-tauri/resources/lomod/
+                (scripts/build-lomod-windows.ps1; needs go + a mingw-w64 UCRT toolchain)
   -Help         Show this help message
 
 Prerequisites:
@@ -55,9 +59,15 @@ if (-not $SkipWeb) {
         Write-Host "Dependencies already installed; skipping pnpm install."
     } else {
         Write-Host "Installing dependencies..."
-        pnpm install
+        # Only the web app and its workspace dependencies (@immich/sdk), not the whole monorepo
+        pnpm install --filter "immich-web..."
         if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
     }
+
+    # The web app imports @immich/sdk from its compiled build/ dir, which a fresh clone lacks
+    Write-Host "Building @immich/sdk..."
+    pnpm --filter "@immich/sdk" run build
+    if ($LASTEXITCODE -ne 0) { throw "@immich/sdk build failed" }
 
     Write-Host "Building static SPA..."
     if (Test-Path "build") { Remove-Item -Recurse -Force "build" }
@@ -102,7 +112,7 @@ if (-not $SkipProxy) {
     if ($LASTEXITCODE -ne 0) { throw "esbuild bundle failed" }
 
     Write-Host "Packaging with pkg..."
-    npx pkg dist/server.cjs --targets node20-win-x64 --output dist/proxy.exe
+    npx pkg dist/server.cjs --targets node22-win-x64 --output dist/proxy.exe
     if ($LASTEXITCODE -ne 0) { throw "pkg build failed" }
 
     # Copy to Tauri resources
@@ -150,13 +160,18 @@ foreach ($targetDir in @("$ScriptDir\src-tauri\target\release", "$ScriptDir\src-
 Write-Host "Proxy resources synced to existing target directories" -ForegroundColor Green
 
 # ---- Step 3: Verify lomo-backend files ----
+if ($BuildLomod) {
+    Write-Host "`n--- Step 3: Building lomod from submodules/lomod ---" -ForegroundColor Yellow
+    & "$ScriptDir\scripts\build-lomod-windows.ps1"
+}
 Write-Host "`n--- Step 3: Verifying lomo-backend files ---" -ForegroundColor Yellow
 $lomodExe = "$ScriptDir\src-tauri\resources\lomod\lomod.exe"
 if (Test-Path $lomodExe) {
     Write-Host "lomod.exe: OK" -ForegroundColor Green
 } else {
     Write-Host "ERROR: lomod.exe not found at $lomodExe" -ForegroundColor Red
-    Write-Host "Extract lomoagent.msi and copy lomod/ contents to src-tauri/resources/lomod/" -ForegroundColor Red
+    Write-Host "Build it from submodules/lomod with -BuildLomod (or scripts\build-lomod-windows.ps1)," -ForegroundColor Red
+    Write-Host "or extract lomoagent.msi and copy lomod/ contents to src-tauri/resources/lomod/" -ForegroundColor Red
     Write-Host "  msiexec /a lomoagent.msi /qn TARGETDIR=C:\temp\msi-extract" -ForegroundColor DarkGray
     Write-Host "  Copy-Item -Recurse C:\temp\msi-extract\PFiles\Lomoware\Lomoagent\lomod\* src-tauri\resources\lomod\" -ForegroundColor DarkGray
     exit 1

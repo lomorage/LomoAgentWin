@@ -1,0 +1,119 @@
+# Builds the Windows installers (NSIS setup.exe + MSI) from source: the Immich web frontend
+# (submodules/immich), the proxy (proxy/), lomod (submodules/lomod) and the Tauri shell.
+#
+# Every run uploads the installers as a workflow artifact. Pushing a tag vX.Y.Z (matching
+# "version" in src-tauri/tauri.conf.json) also creates a *draft* GitHub Release with the
+# installers and install.ps1 attached; publish it by hand once checked, since install.ps1
+# installs whatever the latest published release is.
+name: Build Windows installer
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write # for the draft release on tags
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Allow long paths (node_modules, exiftool_files)
+        run: git config --system core.longpaths true
+
+      - uses: actions/checkout@v7
+
+      - name: Check out the immich and lomod submodules
+        # Not the test-data submodules: they're large and not needed to build.
+        run: git submodule update --init --depth 1 submodules/immich submodules/lomod
+
+      - name: Read app version
+        id: version
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          "version=$version" >> $env:GITHUB_OUTPUT
+          if ($env:GITHUB_REF -like 'refs/tags/v*' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME doesn't match tauri.conf.json version $version"
+          }
+
+      # ---- toolchains ----
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.13.1 # submodules/immich/web requires it (engine-strict)
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10.30.3 # the version submodules/immich pins
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26" # same as lomod's CI
+          cache: false # lomod vendors its dependencies
+
+      - name: Set up MSYS2 UCRT64 (mingw-w64 toolchain for lomod's cgo + libvips)
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-gettext-runtime
+            mingw-w64-ucrt-x86_64-tools-git
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install tauri-cli
+        run: |
+          cargo tauri --version *> $null
+          if ($LASTEXITCODE -ne 0) { cargo install tauri-cli --version "^2" --locked }
+
+      # ---- lomod ----
+      - name: Cache lomod's Windows dependencies (vips-dev, exiftool)
+        uses: actions/cache@v4
+        with:
+          path: submodules/lomod/windows-deps
+          key: lomod-windows-deps-${{ hashFiles('submodules/lomod/scripts/windows/fetch-vips.ps1', 'submodules/lomod/scripts/windows/collect-deps.ps1') }}
+
+      - name: Build lomod
+        run: |
+          # Only for this step, so the MinGW tools don't shadow anything the Rust/Node builds use.
+          $env:PATH = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin;$env:PATH"
+          ./scripts/build-lomod-windows.ps1
+
+      # ---- web + proxy + Tauri ----
+      - name: Build installers
+        run: ./build-tauri.ps1
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: lomoagent-windows-${{ steps.version.outputs.version }}
+          path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+
+      - name: Draft GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            install.ps1
