@@ -7,3 +7,8 @@
 [submodule "submodules/immich"]
 	path = submodules/immich
 	url = https://github.com/lomolomo2/immich.git
+	branch = main
+[submodule "submodules/lomod"]
+	path = submodules/lomod
+	url = https://github.com/lomorage/lomod.git
+	branch = main

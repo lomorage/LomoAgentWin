@@ -30,7 +30,7 @@ Build steps in order:
 
 **Prerequisite**: `src-tauri/resources/lomod/lomod.exe` must exist (extract from `lomoagent.msi`).
 
-`submodules/immich` is a git submodule (fork `lomolomo2/immich`); after cloning run `git submodule update --init submodules/immich`. After pushing immich changes, commit the updated submodule pointer here so each release records the web commit it was built from.
+`submodules/immich` (fork `lomolomo2/immich`) and `submodules/lomod` (`lomorage/lomod`, the lomo-backend server source) are git submodules tracking `main`; after cloning run `git submodule update --init submodules/immich submodules/lomod` (`git submodule update --remote <path>` pulls the latest `main`). After pushing changes in either, commit the updated submodule pointer here so each release records the commits it was built from.
 
 ### Dev iteration (quick)
 
