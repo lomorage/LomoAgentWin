@@ -4,3 +4,6 @@
 [submodule "submodules/test-data-exif-orientation"]
 	path = submodules/test-data-exif-orientation
 	url = https://github.com/recurser/exif-orientation-examples
+[submodule "submodules/immich"]
+	path = submodules/immich
+	url = https://github.com/lomolomo2/immich.git

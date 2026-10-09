@@ -37,8 +37,9 @@ src-tauri/resources/
 # Claude Code local config
 .claude/
 
-# Submodules managed separately
-submodules/
+# Local clones not registered as submodules (immich and test-data are real submodules)
+submodules/lomo-backend/
+submodules/picturama/
 
 # General
 .DS_Store
