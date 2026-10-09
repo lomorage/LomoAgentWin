@@ -4,7 +4,9 @@
 # The MSI isn't built here: WiX's light.exe fails on the hosted runner, and releases only
 # ship the NSIS installer anyway (install.ps1 and publish-release-assets.ps1 use *setup.exe).
 #
-# Every run uploads the installer as a workflow artifact. Pushing a tag vX.Y.Z (matching
+# Every run uploads the installer as a workflow artifact, then installs it on the runner,
+# starts the app and runs scripts/ci/smoke-test.mjs against it (web UI loads, create the
+# admin account, sign in, upload a photo, timeline + thumbnail + full-size preview). Pushing a tag vX.Y.Z (matching
 # "version" in src-tauri/tauri.conf.json) also creates a *draft* GitHub Release with the
 # installers and install.ps1 attached; publish it by hand once checked, since install.ps1
 # installs whatever the latest published release is.
@@ -109,6 +111,55 @@ jobs:
           name: lomoagent-windows-${{ steps.version.outputs.version }}
           path: src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
+
+      # ---- smoke test: install the package and drive the basic user flow ----
+      - name: Install the package and start the app
+        id: app
+        run: |
+          $setup = Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          Write-Host "Installing $($setup.Name) silently"
+          $installer = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
+          if ($installer.ExitCode -ne 0) { throw "installer exited with code $($installer.ExitCode)" }
+
+          # The app installs per-user by default; find it by its bundled proxy.exe
+          $proxyExe = Get-ChildItem $env:LOCALAPPDATA, $env:ProgramFiles -Filter proxy.exe -Recurse -Depth 2 -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $proxyExe) { throw "installed app not found (no proxy.exe under LOCALAPPDATA or Program Files)" }
+          $installDir = $proxyExe.DirectoryName
+          if (-not (Test-Path "$installDir\lomod\lomod.exe")) { throw "lomod\lomod.exe missing from $installDir" }
+          $appExe = Get-ChildItem $installDir -Filter *.exe |
+            Where-Object { $_.Name -notin @("proxy.exe", "uninstall.exe") } | Select-Object -First 1
+          if (-not $appExe) { throw "app executable not found in $installDir" }
+          Write-Host "Installed to $installDir"
+          Get-ChildItem $installDir | Format-Table Name, Length -AutoSize | Out-String | Write-Host
+
+          Write-Host "Starting $($appExe.Name)"
+          $app = Start-Process -FilePath $appExe.FullName -PassThru
+          "pid=$($app.Id)" >> $env:GITHUB_OUTPUT
+
+      - name: Smoke test
+        run: |
+          # First run: the app's data dir is fresh, so its photos dir is the default
+          # <data dir>\photos, and setup puts the admin's home under it.
+          $env:ADMIN_HOME = "$env:APPDATA\com.lomoware.photoviewer\photos\admin"
+          node scripts/ci/smoke-test.mjs
+          if ($LASTEXITCODE -ne 0) { throw "smoke test failed" }
+          if (-not (Get-Process -Id ${{ steps.app.outputs.pid }} -ErrorAction SilentlyContinue)) {
+            throw "the app exited during the smoke test"
+          }
+
+      - name: App logs
+        if: always() && steps.app.outcome != 'skipped'
+        run: |
+          $dataDir = "$env:APPDATA\com.lomoware.photoviewer"
+          Get-ChildItem $dataDir -Recurse -Include *.log -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "::group::$($_.FullName)"
+            Get-Content $_.FullName -Tail 80 -ErrorAction SilentlyContinue
+            Write-Host "::endgroup::"
+          }
+          Get-Process lomod, proxy -ErrorAction SilentlyContinue | Format-Table Id, Name, StartTime -AutoSize | Out-String | Write-Host
+          if ("${{ steps.app.outputs.pid }}") { Stop-Process -Id ${{ steps.app.outputs.pid }} -Force -ErrorAction SilentlyContinue }
+          Stop-Process -Name lomod, proxy -Force -ErrorAction SilentlyContinue
 
       - name: Draft GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
