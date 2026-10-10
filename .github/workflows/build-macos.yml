@@ -149,7 +149,10 @@ jobs:
         if: always() && steps.app.outcome != 'skipped'
         run: |
           echo "::group::app stdout/stderr"
-          tail -n 80 "$RUNNER_TEMP/app.log" || true
+          # Head too: a crashing child's (Go) dump starts with the reason, then many stacks
+          head -n 60 "$RUNNER_TEMP/app.log" || true
+          echo "[...]"
+          tail -n 40 "$RUNNER_TEMP/app.log" || true
           echo "::endgroup::"
           data_dir="$HOME/Library/Application Support/com.lomoware.photoviewer"
           find "$data_dir" -name '*.log' 2>/dev/null | while read -r f; do

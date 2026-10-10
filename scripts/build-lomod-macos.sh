@@ -140,7 +140,38 @@ done < <(find "${STAGE}" -type f -perm -u+x -o -type f -name '*.dylib' -o -type 
 "${STAGE}/exiftool" -ver
 "${STAGE}/ffmpeg" -hide_banner -version | sed -n 1p
 
-# ---- 5. Swap the finished bundle into place ----
+# ---- 5. Start the bundled lomod once, as the app does, and wait for it to answer ----
+echo "--- Starting lomod ---"
+trial="$(mktemp -d)"
+mkdir -p "${trial}/base" "${trial}/photos"
+port=18000
+"${STAGE}/lomod" --mount-dir "${trial}/photos" --base "${trial}/base" --exe-dir "${STAGE}" \
+    --port "${port}" --admin-token 123456 > "${trial}/lomod.out" 2>&1 &
+lomod_pid=$!
+up=0
+for _ in $(seq 1 30); do
+    # Any HTTP answer will do (000: no connection yet)
+    code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/status" || true)"
+    if [[ -n "${code}" && "${code}" != 000 ]]; then
+        up=1
+        break
+    fi
+    kill -0 "${lomod_pid}" 2>/dev/null || break
+    sleep 1
+done
+kill "${lomod_pid}" 2>/dev/null || true
+wait "${lomod_pid}" 2>/dev/null || true
+if [[ "${up}" != 1 ]]; then
+    echo "lomod did not come up; its output:" >&2
+    # A Go crash puts the reason first, then one stack per goroutine.
+    sed -n 1,80p "${trial}/lomod.out" >&2
+    rm -rf "${trial}"
+    exit 1
+fi
+echo "lomod answered on port ${port}"
+rm -rf "${trial}"
+
+# ---- 6. Swap the finished bundle into place ----
 rm -rf "${DEST_DIR}"
 mv "${STAGE}" "${DEST_DIR}"
 echo "lomod staged at ${DEST_DIR} ($(du -sh "${DEST_DIR}" | cut -f1))"
