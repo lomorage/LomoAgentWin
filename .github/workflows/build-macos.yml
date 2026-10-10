@@ -2,7 +2,8 @@
 # on an arm64 runner: the Immich web frontend (submodules/immich), the proxy (proxy/), lomod
 # (submodules/lomod, with libvips/ffmpeg/exiftool from Homebrew bundled into the app) and the
 # Tauri shell. The .dmg runs on the runner's macOS version and later, since the bundled
-# Homebrew dylibs are built for it (the release notes state the minimum).
+# Homebrew dylibs are built for it, so the runner is the oldest macOS supported (min_macos);
+# the build fails if any bundled binary needs a newer one.
 #
 # Intel (x86_64) builds the same way on macos-15-intel (add it to the matrix), but lomod
 # crashes there at startup until submodules/lomod vendors golang.org/x/sys a76c4d0 or later:
@@ -45,7 +46,8 @@ jobs:
       matrix:
         include:
           - arch: arm64
-            runner: macos-latest # Apple Silicon
+            runner: macos-14 # Apple Silicon; its macOS is the app's minimum
+            min_macos: "14.0"
           # - arch: x86_64           # Intel: see the note at the top
           #   runner: macos-15-intel
     name: build (${{ matrix.arch }})
@@ -57,6 +59,7 @@ jobs:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
       HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.min_macos }} # for what we compile (Rust, cgo)
     steps:
       - uses: actions/checkout@v7
 
@@ -133,10 +136,18 @@ jobs:
         run: |
           # The highest deployment target among the bundled Mach-O files (Homebrew's dylibs are
           # built for the runner's macOS); the app won't load on anything older.
-          minos="$(find src-tauri/resources/lomod -type f \( -perm -u+x -o -name '*.dylib' \) -print0 |
+          minos="$(find src-tauri/resources/lomod src-tauri/resources/proxy -type f \( -perm -u+x -o -name '*.dylib' \) -print0 |
             xargs -0 otool -l 2>/dev/null | awk '$1 == "minos" { print $2 }' | sort -t. -k1,1n -k2,2n | tail -n 1)"
           echo "Bundled binaries need macOS ${minos:-?} or later"
-          echo "minos=${minos:-11.0}" >> "$GITHUB_OUTPUT"
+          [ -n "$minos" ] || { echo "found no minimum macOS version in the bundled binaries"; exit 1; }
+          highest="$(printf '%s\n%s\n' "$minos" "$MIN_MACOS" | sort -t. -k1,1n -k2,2n | tail -n 1)"
+          if [ "$highest" != "$MIN_MACOS" ]; then
+            echo "Bundled binaries need macOS $minos, newer than this build's minimum $MIN_MACOS"
+            exit 1
+          fi
+          echo "minos=$MIN_MACOS" >> "$GITHUB_OUTPUT"
+        env:
+          MIN_MACOS: ${{ matrix.min_macos }}
 
       - name: Upload the .dmg
         uses: actions/upload-artifact@v7
