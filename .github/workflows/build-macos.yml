@@ -1,6 +1,10 @@
-# Builds the macOS app (lomorage.app, in a .dmg) for Apple Silicon (arm64) from source: the
-# Immich web frontend (submodules/immich), the proxy (proxy/), lomod (submodules/lomod, with
+# Builds the macOS app (lomorage.app, in a .dmg) from source, once for Apple Silicon (arm64)
+# and once for Intel (x86_64), each natively on a runner of that architecture: the Immich web
+# frontend (submodules/immich), the proxy (proxy/), lomod (submodules/lomod, with
 # libvips/ffmpeg/exiftool from Homebrew bundled into the app) and the Tauri shell.
+#
+# Each .dmg runs on the macOS version of its runner and later, since the bundled Homebrew
+# dylibs are built for it.
 #
 # The app is ad-hoc signed, not signed with a Developer ID or notarized: a copy downloaded
 # with a browser is blocked by Gatekeeper until its quarantine flag is cleared
@@ -25,7 +29,16 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-latest # Apple Silicon
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-latest # Apple Silicon
+          - arch: x86_64
+            runner: macos-15-intel
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
@@ -40,7 +53,10 @@ jobs:
 
       - name: Read app version
         id: version
-        run: echo "version=$(node -p 'require("./src-tauri/tauri.conf.json").version')" >> "$GITHUB_OUTPUT"
+        run: |
+          # Everything builds for the host's architecture, so the runner must match the entry.
+          [ "$(uname -m)" = "${{ matrix.arch }}" ] || { echo "runner is $(uname -m), expected ${{ matrix.arch }}"; exit 1; }
+          echo "version=$(node -p 'require("./src-tauri/tauri.conf.json").version')" >> "$GITHUB_OUTPUT"
 
       # ---- toolchains ----
       - uses: actions/setup-node@v6
@@ -86,7 +102,7 @@ jobs:
       - name: Upload the .dmg
         uses: actions/upload-artifact@v7
         with:
-          name: lomoagent-macos-arm64-${{ steps.version.outputs.version }}
+          name: lomoagent-macos-${{ matrix.arch }}-${{ steps.version.outputs.version }}
           path: src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
