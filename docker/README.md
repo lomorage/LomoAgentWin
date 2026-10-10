@@ -21,17 +21,22 @@ curl -fsSL https://raw.githubusercontent.com/lomorage/LomoAgentWin/main/docker/i
 2. 没装 Docker 就用官方脚本装上
 3. 在 `~/lomo` 下生成 `docker-compose.yml` 和 `.env`
 4. 拉取镜像并启动
-5. 最后打印访问地址和首个账号的密码：
+5. 最后打印访问地址：
 
 ```
   Lomo Photo Viewer is running.
 
   Web app (computer or phone browser):  http://192.168.1.20:3001
   Lomorage mobile app server address:   http://192.168.1.20:8000
-  Account:  user: admin   password: 3kQf9xV2mTpA   (also in ~/lomo/data/admin-password.txt)
+  Account:  user: admin   password: open the web app; the first visit asks you to choose it
 ```
 
-**可选设置**：通过环境变量传给脚本，例如把照片放到大硬盘上、自己指定密码：
+**首次设置密码**：账号默认是 `admin`。第一次用浏览器打开网页时，会先进入设置页面，在那里为 `admin` 设定密码（至少 6 位），之后用这个密码登录网页和 Lomorage App。
+
+- 密码只能设置一次：谁先打开网页谁来设。所以装好后请尽快自己打开一次。
+- 设置完成后，再打开网页就是正常的登录页。
+
+**可选设置**：通过环境变量传给脚本，例如把照片放到大硬盘上。如果是无人值守安装，也可以直接指定密码，这样就跳过网页设置：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lomorage/LomoAgentWin/main/docker/install.sh \
@@ -43,10 +48,13 @@ curl -fsSL https://raw.githubusercontent.com/lomorage/LomoAgentWin/main/docker/i
 | `LOMO_DIR` | `~/lomo` | 安装目录（compose 文件、`.env`） |
 | `LOMO_PHOTOS_DIR` | `$LOMO_DIR/photos` | 照片存放位置 |
 | `LOMO_DATA_DIR` | `$LOMO_DIR/data` | 数据库、日志、设置 |
-| `LOMO_ADMIN_USER` / `LOMO_ADMIN_PASSWORD` | `admin` / 自动生成 | 首个账号（只在第一次启动时使用） |
+| `LOMO_ADMIN_USER` / `LOMO_ADMIN_PASSWORD` | `admin` / 空（第一次打开网页时设置） | 首个账号；填了密码就直接创建，跳过网页设置 |
 | `LOMO_IMAGE` | `ghcr.io/lomorage/lomo-photo-viewer:test` | 要运行的镜像 |
 | `TZ` | 本机时区 | 照片日期使用的时区 |
+| `LOMO_WEB_PORT` / `LOMO_LOMOD_PORT` / `LOMO_WEBDAV_PORT` | `3001` / `8000` / `8004` | 网页、lomod（Lomorage App 连接）、WebDAV 的端口 |
 | `LOMO_SKIP_DOCKER_INSTALL=1` | — | 没装 Docker 时报错退出，不自动安装 |
+
+**端口被占用**（例如这台机器上已经装了原生的 lomod，占着 8000）：脚本会自动换一个空闲端口，并提示换成了哪个，例如 `using 8001 instead`。打印出来的 Lomorage App 服务器地址也会是新端口。网页端不受影响，仍然用 3001。如果是你自己指定的端口被占用，脚本会报错退出，不会擅自更改。
 
 **升级**：再运行一次同样的命令即可。上次的设置（照片目录等）会从 `~/lomo/.env` 里读取，照片、数据和账号都会保留。
 
@@ -63,20 +71,15 @@ docker compose up -d
 docker compose logs
 ```
 
-第一次启动时，日志里会打印访问地址和首个账号：
+日志里会打印访问地址：
 
 ```
-[lomo] Created the first account:
-[lomo]   user:     admin
-[lomo]   password: 3kQf9xV2mTpA
-[lomo]   (generated; also saved to /data/admin-password.txt)
-...
 [lomo] Web app (browser, phone or computer): http://192.168.1.20:3001
 [lomo] Lomorage mobile app server address:   http://192.168.1.20:8000
+[lomo] First visit: open the web app and choose the password for the "admin" account.
 ```
 
-- 账号密码另外保存在 `./lomo/data/admin-password.txt`
-- 不想用随机密码，就在**第一次启动之前**，把 `docker-compose.yml` 里的 `LOMO_ADMIN_PASSWORD` 填上
+用浏览器打开网页，第一次会让你为 `admin` 设定密码。如果想跳过这一步，可以在**第一次启动之前**，把 `docker-compose.yml` 里的 `LOMO_ADMIN_PASSWORD` 填上。
 
 不用 Compose 的话，等价的命令是：
 
@@ -106,15 +109,14 @@ docker run -d --name lomo-photo-viewer --restart unless-stopped --network host \
 | 项目 | 默认值 | 说明 |
 |---|---|---|
 | `LOMO_ADMIN_USER` | `admin` | 首个账号的用户名（只在第一次启动时使用） |
-| `LOMO_ADMIN_PASSWORD` | 空（自动生成） | 首个账号的密码（只在第一次启动时使用） |
+| `LOMO_ADMIN_PASSWORD` | 空（第一次打开网页时设置） | 首个账号的密码；填了就在第一次启动时直接创建账号 |
 | `TZ` | 镜像内为 UTC，compose 文件里设为 `Asia/Shanghai` | 时区，影响照片按日期分组 |
 | `WEB_PORT` | `3001` | 网页端口 |
 | `LOMOD_PORT` | `8000` | lomod 端口（Lomorage App 连接这个端口） |
+| `WEBDAV_PORT` | `8004` | lomod 的 WebDAV 端口 |
 | `LOMOD_ARGS` | 空 | 追加给 lomod 的额外参数 |
 | 卷 `/photos` | — | 照片（原图和缩略图）。数据量大，建议放在大硬盘上 |
 | 卷 `/data` | — | 数据库、日志（`/data/lomod/var/log/`）、设置 |
-
-lomod 还会占用 `8004` 端口（WebDAV）。
 
 **防火墙**：如果机器开了防火墙，需要放行 3001 和 8000 端口，例如：
 

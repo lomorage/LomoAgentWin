@@ -2,6 +2,8 @@ import { Router } from 'express';
 import * as os from 'os';
 import { lomoFetch } from '../http-agent';
 import { getLomoToken } from '../session';
+import { clearAlbumListCache } from './albums';
+import { clearAlbumBucketCache } from './timeline';
 
 export const stubsRouter = Router();
 
@@ -494,6 +496,19 @@ stubsRouter.get('/lomo/version', async (req, res) => {
     console.error('[version] Failed to read lomod version:', error);
     res.status(502).json({ message: 'Failed to read lomod version' });
   }
+});
+
+// POST /api/lomo/refresh
+// The web app's Refresh button calls this before reloading the page. Photos uploaded straight to
+// lomod (e.g. by the Lomorage mobile app) never pass through this proxy, so its timeline and album
+// caches would keep hiding them for a while; drop the caches so the reload asks lomod again.
+stubsRouter.post('/lomo/refresh', (req, res) => {
+  if (!getLomoToken(req)) {
+    return res.status(401).json({ message: 'Not authenticated' });
+  }
+  clearAlbumBucketCache();
+  clearAlbumListCache();
+  res.status(204).end();
 });
 
 // GET /api/lomo/browser-access-link

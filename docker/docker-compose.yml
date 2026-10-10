@@ -1,7 +1,7 @@
 # Lomo Photo Viewer on a Linux machine -- see README.md next to this file.
 #
 #   docker compose up -d
-#   docker compose logs      # first start: the web address and the generated password
+#   docker compose logs      # the web address; the first visit there sets the admin password
 services:
   lomo:
     image: ghcr.io/lomorage/lomo-photo-viewer:test
@@ -12,8 +12,8 @@ services:
     # shows are the machine's real IP. Ports used: 3001 (web), 8000 (lomod), 8004 (WebDAV).
     network_mode: host
     environment:
-      # First account, created on the first start only. Leave the password empty to have one
-      # generated (shown in `docker compose logs`, saved to ./lomo/data/admin-password.txt).
+      # First account. With the password empty, the first visit to the web app asks for it;
+      # set it here instead to create the account on the first start (unattended installs).
       LOMO_ADMIN_USER: admin
       LOMO_ADMIN_PASSWORD: ""
       # Time zone used to date photos; change to yours.

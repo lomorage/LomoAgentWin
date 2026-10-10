@@ -10,6 +10,7 @@ import { assetsRouter } from './routes/assets';
 import { albumsRouter } from './routes/albums';
 import { stubsRouter } from './routes/stubs';
 import { WELCOME_HTML } from './welcome-page';
+import { webSetupRedirect, webSetupRouter } from './web-setup';
 
 const app = express();
 const httpServer = http.createServer(app);
@@ -105,6 +106,10 @@ app.use((req, _res, next) => {
   console.log(`[proxy] ${req.method} ${req.path}`);
   next();
 });
+
+// First-run account setup in the browser (Docker image only: LOMO_WEB_SETUP=1)
+app.use(webSetupRedirect);
+app.use(webSetupRouter);
 
 // Mount route handlers
 app.use('/api/auth', authRouter);
