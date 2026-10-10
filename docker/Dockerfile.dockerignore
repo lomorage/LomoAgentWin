@@ -1,0 +1,23 @@
+# Build context is the repository root; send only what docker/Dockerfile copies.
+*
+!docker/entrypoint.sh
+!docker/create-admin.mjs
+!scripts/lib/
+!proxy/
+proxy/node_modules
+proxy/dist
+!submodules/lomod/
+submodules/lomod/.git
+submodules/lomod/windows-deps
+submodules/lomod/handler/rice-box.go
+!submodules/immich/package.json
+!submodules/immich/pnpm-lock.yaml
+!submodules/immich/pnpm-workspace.yaml
+!submodules/immich/.pnpmfile.cjs
+!submodules/immich/open-api/
+!submodules/immich/i18n/
+!submodules/immich/web/
+**/node_modules
+submodules/immich/web/build
+submodules/immich/web/.svelte-kit
+submodules/immich/open-api/typescript-sdk/build

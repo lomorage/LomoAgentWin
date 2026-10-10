@@ -63,9 +63,15 @@ if [ "$SKIP_WEB" = false ]; then
   cd "$SCRIPT_DIR/submodules/immich/web"
 
   echo "Installing dependencies..."
-  pnpm install --force
+  # engine-strict=false: web/.npmrc turns it on, which makes pnpm fail on Windows over
+  # exiftool-vendored.pl (os: !win32), a dependency of server/e2e that the web app never uses.
+  pnpm install --force --config.engine-strict=false
 
   # CRITICAL: clean both build/ and .svelte-kit/ to prevent stale cache
+  # The web app imports @immich/sdk from its compiled build/ dir, which a fresh clone lacks
+  echo "Building @immich/sdk..."
+  pnpm --filter "@immich/sdk" run build
+
   echo "Cleaning previous build..."
   rm -rf build .svelte-kit
 
@@ -108,7 +114,7 @@ if [ "$SKIP_PROXY" = false ]; then
     --outfile=dist/server.cjs --external:sharp
 
   echo "Packaging with pkg..."
-  npx pkg dist/server.cjs --targets node20-win-x64 --output dist/proxy.exe
+  npx pkg dist/server.cjs --targets node22-win-x64 --output dist/proxy.exe
 
   cp dist/proxy.exe "$SCRIPT_DIR/src-tauri/resources/proxy.exe"
   ok "proxy.exe copied to src-tauri/resources/"

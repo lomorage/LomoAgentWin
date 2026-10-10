@@ -1,0 +1,23 @@
+# Lomo Photo Viewer on a Linux machine -- see README.md next to this file.
+#
+#   docker compose up -d
+#   docker compose logs      # first start: the web address and the generated password
+services:
+  lomo:
+    image: ghcr.io/lomorage/lomo-photo-viewer:test
+    container_name: lomo-photo-viewer
+    restart: unless-stopped
+    # Host networking: phones and computers on the LAN reach it at this machine's IP, the
+    # Lomorage mobile app can discover it on the LAN, and the addresses/QR codes the web app
+    # shows are the machine's real IP. Ports used: 3001 (web), 8000 (lomod), 8004 (WebDAV).
+    network_mode: host
+    environment:
+      # First account, created on the first start only. Leave the password empty to have one
+      # generated (shown in `docker compose logs`, saved to ./lomo/data/admin-password.txt).
+      LOMO_ADMIN_USER: admin
+      LOMO_ADMIN_PASSWORD: ""
+      # Time zone used to date photos; change to yours.
+      TZ: Asia/Shanghai
+    volumes:
+      - ./lomo/photos:/photos   # your photos (originals + previews)
+      - ./lomo/data:/data       # database, logs, settings

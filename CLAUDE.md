@@ -28,7 +28,13 @@ Build steps in order:
 3. Sharp native modules zipped to `src-tauri/resources/sharp.zip` (preserves directory structure — Tauri flattens resources otherwise)
 4. `cargo tauri build` (or `--debug`)
 
-**Prerequisite**: `src-tauri/resources/lomod/lomod.exe` must exist (extract from `lomoagent.msi`).
+**Prerequisite**: `src-tauri/resources/lomod/lomod.exe` must exist. Either build it from `submodules/lomod` with `.\build-tauri.ps1 -BuildLomod` (runs `scripts/build-lomod-windows.ps1`; needs `go` and a mingw-w64 **UCRT** toolchain on PATH, e.g. MSYS2 UCRT64 — see the script header), or extract it from `lomoagent.msi`.
+
+### CI
+`.github/workflows/build-windows.yml` builds everything (lomod included) on `windows-latest` on pushes to `main` / `claude/**`, PRs and manual runs, and uploads the NSIS installer as a workflow artifact (MSI is skipped in CI: WiX's `light.exe` fails on the hosted runner; `.\build-tauri.ps1 -Bundles nsis` does the same locally). It then installs that package on the runner, starts the app and runs `scripts/ci/smoke-test.mjs` (web UI, create admin, login, upload, timeline, thumbnail, preview); the same script runs against any lomod + proxy pair via `PROXY_URL` / `LOMOD_URL` / `ADMIN_HOME`. Pushing a tag `vX.Y.Z` that matches `version` in `src-tauri/tauri.conf.json` also creates a **draft** GitHub Release with the installer and `install.ps1`; publish it manually.
+
+### Docker (Linux server)
+`docker/Dockerfile` (build from the repo root: `docker build -f docker/Dockerfile .`) packages lomod (built from `submodules/lomod` on Ubuntu 24.04 + libvips, with exiftool and ffmpeg from apt), the Immich web build and the proxy (Node, esbuild bundle) into one image; `docker/entrypoint.sh` runs lomod (`/data/lomod` base, `/photos` mount dir) and the proxy (port 3001, `WEB_DIR=/app/web`, `CONFIG_PATH=/data/proxy/config.json`), and `docker/create-admin.mjs` creates the first account on first start (there is no Tauri setup screen). In the browser the web app sends `X-Lomo-Server: http://<page host>:8000`, so the proxy reaches lomod through the host's LAN address — hence host networking in `docker/docker-compose.yml`. User docs: `docker/README.md` (Chinese). `.github/workflows/docker.yml` builds, runs `scripts/ci/docker-smoke.sh`, then pushes `ghcr.io/<owner>/lomo-photo-viewer`; tag `docker-vX.Y.Z[-pre]` publishes a (pre-)release. The credential derivation shared by the smoke test and first-start setup is `scripts/lib/lomo-credential.mjs`.
 
 `submodules/immich` (fork `lomolomo2/immich`) and `submodules/lomod` (`lomorage/lomod`, the lomo-backend server source) are git submodules tracking `main`; after cloning run `git submodule update --init submodules/immich submodules/lomod` (`git submodule update --remote <path>` pulls the latest `main`). After pushing changes in either, commit the updated submodule pointer here so each release records the commits it was built from.
 
@@ -38,7 +44,7 @@ After changing proxy TypeScript:
 ```bash
 cd proxy
 npx esbuild server.ts --bundle --platform=node --target=node20 --outfile=dist/server.cjs --external:sharp
-npx pkg dist/server.cjs --targets node20-win-x64 --output dist/proxy.exe
+npx pkg dist/server.cjs --targets node22-win-x64 --output dist/proxy.exe
 cp dist/proxy.exe ../src-tauri/target/debug/proxy.exe
 ```
 

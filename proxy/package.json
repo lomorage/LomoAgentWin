@@ -7,13 +7,13 @@
     "dev": "npx tsx --watch server.ts",
     "start": "npx tsx server.ts",
     "bundle": "npx esbuild server.ts --bundle --platform=node --target=node20 --outfile=dist/server.cjs",
-    "build:exe": "npm run bundle && npx pkg --public --no-bytecode dist/server.cjs --targets node20-win-x64 --output dist/proxy.exe",
+    "build:exe": "npm run bundle && npx pkg --public --no-bytecode dist/server.cjs --targets node22-win-x64 --output dist/proxy.exe",
     "build": "npm run build:exe"
   },
   "bin": "dist/server.cjs",
   "pkg": {
     "targets": [
-      "node20-win-x64"
+      "node22-win-x64"
     ]
   },
   "dependencies": {
