@@ -143,7 +143,10 @@ if [ "$SKIP_PROXY" = false ]; then
   cd "$SCRIPT_DIR/proxy"
 
   echo "Installing dependencies..."
-  npm install
+  # Use sharp's prebuilt binaries (bundled into sharp.zip): with a libvips on the system (e.g.
+  # Homebrew's, which lomod's macOS build needs) sharp would otherwise build itself from source
+  # against that one.
+  SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install
 
   echo "Bundling with esbuild..."
   # --external:sharp keeps the native module out of the bundle (loaded at runtime from sharp.zip)
