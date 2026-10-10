@@ -52,6 +52,12 @@ function stringToHexByte(str: string): string {
   return hex;
 }
 
+// The credential lomod stores for a user (and expects at login): the PHC string, hex-encoded,
+// plus "00". Same as hash_password_for_lomo in src-tauri/src/main.rs.
+export async function lomoCredential(password: string, username: string): Promise<string> {
+  return `${stringToHexByte(await hashPasswordForLomo(password, username))}00`;
+}
+
 function normalizeDeviceId(value: string): string {
   return String(value)
     .trim()
@@ -116,8 +122,7 @@ authRouter.post('/login', async (req, res) => {
     console.log(`[auth] Login attempt: user=${username}, server=${serverUrl}, device=${deviceId}`);
 
     // Lomod expects the Argon2-derived credential string, not the plaintext password.
-    const encodedPassword = await hashPasswordForLomo(password, username);
-    const hexPassword = `${stringToHexByte(encodedPassword)}00`;
+    const hexPassword = await lomoCredential(password, username);
     const base64Credentials = Buffer.from(`${username}:${hexPassword}:${deviceId}`).toString('base64');
 
     // Call lomo-backend login

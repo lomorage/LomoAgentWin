@@ -6,7 +6,8 @@
 #      is created, and scripts/ci/smoke-test.mjs passes (web app, login, upload, timeline,
 #      thumbnail, preview)
 #   2. restart on the same volumes: it comes back up and doesn't try to create the account again
-#   3. first start without a password: one is generated, logged and saved, and it signs in
+#   3. first start without a password: the web app redirects to /lomo-setup, where the admin
+#      password is chosen once; then signing in works
 #
 # Usage: scripts/ci/docker-smoke.sh IMAGE
 # Needs docker, curl and Node 20+; uses ports 3001, 8000 and 8004 on this machine.
@@ -76,15 +77,26 @@ echo "ok: restart keeps the data and the account"
 docker rm -f "$NAME" >/dev/null
 docker run --rm --entrypoint sh -v "$WORK:/w" "$IMAGE" -c 'rm -rf /w/*'
 
-# ---- 3. first start without a password: one is generated ----
+# ---- 3. first start without a password: the web app asks for it on the first visit ----
 start
 wait_up
-password=$(docker exec "$NAME" sed -n 2p /data/admin-password.txt) || fail "no /data/admin-password.txt"
-[ -n "$password" ] || fail "empty generated password"
-log_has "password: $password" || fail "generated password not shown in the log"
+log_has 'First visit: open the web app and choose the password' || fail "no first-visit hint in the log"
+docker exec "$NAME" test ! -e /data/admin-password.txt || fail "a password was generated; the first visit should choose it"
+location=$(curl -s -o /dev/null -w '%{redirect_url}' http://127.0.0.1:3001/)
+[[ "$location" == */lomo-setup ]] || fail "before setup, / should redirect to /lomo-setup (got '$location')"
+page=$(curl -fs http://127.0.0.1:3001/lomo-setup) || fail "GET /lomo-setup failed"
+grep -q 'Create account' <<<"$page" || fail "/lomo-setup is not the setup page"
+! grep -q '__[A-Z_]*__' <<<"$page" || fail "/lomo-setup has unfilled placeholders: $(grep -o '__[A-Z_]*__' <<<"$page" | sort -u | tr '\n' ' ')"
+setup() { curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d "{\"password\":\"$1\"}" http://127.0.0.1:3001/api/lomo/setup; }
+[ "$(setup abc)" = 400 ] || fail "a too-short password was accepted"
+[ "$(setup first-visit-pw)" = 201 ] || fail "web setup did not create the account"
+[ "$(setup someone-else)" = 409 ] || fail "web setup could be run a second time"
+location=$(curl -s -o /dev/null -w '%{redirect_url}' http://127.0.0.1:3001/)
+[ -z "$location" ] || fail "after setup, / still redirects to '$location'"
 code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
-  -d "{\"email\":\"admin\",\"password\":\"$password\"}" http://127.0.0.1:3001/api/auth/login)
-[ "$code" = 201 ] || fail "login with the generated password returned HTTP $code"
-echo "ok: generated password is logged, saved and works"
+  -d '{"email":"admin","password":"first-visit-pw"}' http://127.0.0.1:3001/api/auth/login)
+[ "$code" = 201 ] || fail "login with the password chosen on the first visit returned HTTP $code"
+docker exec "$NAME" test -d /photos/admin || fail "the account's photo home /photos/admin is missing"
+echo "ok: first visit sets the admin password in the browser; signing in works; it can't be set twice"
 
 echo "DOCKER SMOKE PASS"

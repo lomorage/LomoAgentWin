@@ -8,9 +8,11 @@ PHOTOS_DIR="${LOMO_PHOTOS_DIR:-/photos}"
 LOMOD_PORT="${LOMOD_PORT:-8000}"
 WEB_PORT="${WEB_PORT:-3001}"
 WEBDAV_PORT="${WEBDAV_PORT:-8004}"
+ADMIN_USER="${LOMO_ADMIN_USER:-admin}"
 export LOMO_DATA_DIR="$DATA_DIR" LOMO_PHOTOS_DIR="$PHOTOS_DIR" LOMOD_PORT
 
-mkdir -p "$DATA_DIR/lomod" "$DATA_DIR/proxy" "$PHOTOS_DIR"
+# The first account's photo home, ready for whichever way it gets created
+mkdir -p "$DATA_DIR/lomod" "$DATA_DIR/proxy" "$PHOTOS_DIR/$ADMIN_USER"
 
 pids=()
 stop() {
@@ -36,8 +38,12 @@ node /app/docker/create-admin.mjs
 
 # ---- web proxy: serves the photo web app and translates its API calls to lomod ----
 # LOMO_PIN_BACKEND: always use this container's lomod, whatever port it is on (see proxy/routes/auth.ts)
+# LOMO_WEB_SETUP: until lomod has an account, the web app asks for the admin password (proxy/web-setup.ts)
 PROXY_PORT="$WEB_PORT" \
 LOMO_PIN_BACKEND=1 \
+LOMO_WEB_SETUP=1 \
+LOMO_ADMIN_USER="$ADMIN_USER" \
+LOMO_ADMIN_HOME="$PHOTOS_DIR/$ADMIN_USER" \
 WEB_DIR=/app/web \
 LOMO_BACKEND_URL="http://127.0.0.1:$LOMOD_PORT" \
 CONFIG_PATH="$DATA_DIR/proxy/config.json" \
@@ -59,6 +65,10 @@ for a in $addrs; do
   echo "[lomo] Lomorage mobile app server address:   http://$a:$LOMOD_PORT"
 done
 echo "[lomo] Photos are stored in $PHOTOS_DIR, app data in $DATA_DIR"
+# lomod serves its first-run page only while it has no account
+if [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$LOMOD_PORT/welcome")" = 200 ]; then
+  echo "[lomo] First visit: open the web app and choose the password for the \"$ADMIN_USER\" account."
+fi
 echo "[lomo] ------------------------------------------------------------"
 
 # Exit (and let Docker restart the container) as soon as either process stops.

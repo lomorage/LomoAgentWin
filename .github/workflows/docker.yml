@@ -81,36 +81,38 @@ jobs:
         run: scripts/ci/docker-smoke.sh lomo-photo-viewer:ci
 
       - name: Test the one-command installer
-        # As users run it (piped into bash), against the image just built; then again, which is
-        # how users upgrade: the account and settings must survive.
+        # As users run it (piped into bash), against the image just built: install, choose the
+        # password on the first visit, sign in; run it again (how users upgrade) and sign in again.
         run: |
-          export LOMO_DIR="$RUNNER_TEMP/lomo"
           login() {
             curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
-              -d "{\"email\":\"admin\",\"password\":\"$1\"}" http://127.0.0.1:3001/api/auth/login
+              -d "{\"email\":\"admin\",\"password\":\"$1\"}" "http://127.0.0.1:${2:-3001}/api/auth/login"
           }
+          export LOMO_DIR="$RUNNER_TEMP/lomo"
           out=$(LOMO_IMAGE=lomo-photo-viewer:ci bash < docker/install.sh 2>&1) || { echo "$out"; exit 1; }
           echo "$out"
-          password=$(grep -oP 'Account:  user: admin   password: \K\S+' <<<"$out")
-          [ -n "$password" ] || { echo "installer did not print the generated password"; exit 1; }
           grep -q 'Web app (computer or phone browser):  http://' <<<"$out" || { echo "no web address printed"; exit 1; }
-          [ "$(login "$password")" = 201 ] || { echo "login with the printed password failed"; exit 1; }
+          grep -q 'the first visit asks you to choose it' <<<"$out" || { echo "no first-visit hint printed"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+            -d '{"password":"installer-test-pw"}' http://127.0.0.1:3001/api/lomo/setup)
+          [ "$code" = 201 ] || { echo "first-visit setup returned $code"; exit 1; }
+          [ "$(login installer-test-pw)" = 201 ] || { echo "login with the chosen password failed"; exit 1; }
           bash < docker/install.sh
-          [ "$(login "$password")" = 201 ] || { echo "login failed after re-running the installer"; exit 1; }
+          [ "$(login installer-test-pw)" = 201 ] || { echo "login failed after re-running the installer"; exit 1; }
           grep -q '^LOMO_IMAGE=lomo-photo-viewer:ci$' "$LOMO_DIR/.env" || { echo "re-run did not keep the settings"; exit 1; }
           (cd "$LOMO_DIR" && docker compose down)
 
           # Port 8000 already taken (e.g. a native lomod): the installer moves lomod to a free port,
-          # and the web app still signs in (the proxy is pinned to the bundled lomod).
+          # and the web app still signs in (the proxy is pinned to the bundled lomod). Password
+          # given up front this time, the unattended way.
           python3 -m http.server 8000 >/dev/null 2>&1 &
           blocker=$!
           export LOMO_DIR="$RUNNER_TEMP/lomo-ports"
-          out=$(LOMO_IMAGE=lomo-photo-viewer:ci bash < docker/install.sh 2>&1) || { echo "$out"; kill $blocker; exit 1; }
+          out=$(LOMO_IMAGE=lomo-photo-viewer:ci LOMO_ADMIN_PASSWORD=preset-pw bash < docker/install.sh 2>&1) || { echo "$out"; kill $blocker; exit 1; }
           echo "$out"
           grep -q 'port 8000 is already used' <<<"$out" || { echo "no port-conflict warning"; exit 1; }
           grep -q '^LOMO_LOMOD_PORT=8001$' "$LOMO_DIR/.env" || { echo "lomod was not moved to 8001"; exit 1; }
-          password=$(grep -oP 'Account:  user: admin   password: \K\S+' <<<"$out")
-          [ "$(login "$password")" = 201 ] || { echo "login failed with lomod on 8001"; exit 1; }
+          [ "$(login preset-pw)" = 201 ] || { echo "login failed with lomod on 8001"; exit 1; }
           (cd "$LOMO_DIR" && docker compose down)
           kill $blocker
 
