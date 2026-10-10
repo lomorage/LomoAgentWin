@@ -71,7 +71,10 @@ jobs:
 
       # ---- lomod + web + proxy + Tauri ----
       - name: Build lomod
-        run: ./scripts/build-lomod-macos.sh
+        # dylibbundler (in lomod's collect-deps.sh) prompts for any dylib it can't locate,
+        # which would otherwise hang until the job timeout
+        timeout-minutes: 30
+        run: ./scripts/build-lomod-macos.sh < /dev/null
 
       - name: Build the app
         run: ./build-tauri.sh --bundles app,dmg
