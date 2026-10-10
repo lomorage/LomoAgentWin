@@ -159,6 +159,9 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
           prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
+          # The repo's "latest" release stays the Windows one: install.ps1 and the README's
+          # install command download from releases/latest.
+          make_latest: false
           files: |
             docker/install.sh
             docker/docker-compose.yml
