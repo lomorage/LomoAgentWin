@@ -1,0 +1,140 @@
+# Builds the macOS app (lomorage.app, in a .dmg) for Apple Silicon (arm64) from source: the
+# Immich web frontend (submodules/immich), the proxy (proxy/), lomod (submodules/lomod, with
+# libvips/ffmpeg/exiftool from Homebrew bundled into the app) and the Tauri shell.
+#
+# The app is ad-hoc signed, not signed with a Developer ID or notarized: a copy downloaded
+# with a browser is blocked by Gatekeeper until its quarantine flag is cleared
+# (xattr -dr com.apple.quarantine /Applications/lomorage.app).
+#
+# Every run uploads the .dmg as a workflow artifact, then installs the app from it on the
+# runner, starts it and runs scripts/ci/smoke-test.mjs against it (web UI loads, create the
+# admin account, sign in, upload a photo, timeline + thumbnail + full-size preview).
+#
+# Like build-windows.yml, it runs when a release/** branch is created or pushed to, and when
+# started by hand (Actions -> Build macOS app -> Run workflow).
+name: Build macOS app
+
+on:
+  push:
+    branches: ["release/**", "claude/macos-arm64-build"] # TEMP: test runs on this branch
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest # Apple Silicon
+    timeout-minutes: 120
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check out the immich and lomod submodules
+        # Not the test-data submodules: they're large and not needed to build.
+        run: git submodule update --init --depth 1 submodules/immich submodules/lomod
+
+      - name: Read app version
+        id: version
+        run: echo "version=$(node -p 'require("./src-tauri/tauri.conf.json").version')" >> "$GITHUB_OUTPUT"
+
+      # ---- toolchains ----
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.13.1 # submodules/immich/web requires it (engine-strict)
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10.30.3 # the version submodules/immich pins
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26" # same as lomod's CI
+          cache: false # lomod vendors its dependencies
+
+      - name: Install lomod's build and runtime dependencies (Homebrew)
+        # bash: lomod's collect-deps.sh needs a newer bash than macOS's 3.2
+        run: brew install vips pkgconf ffmpeg exiftool dylibbundler bash
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true # keep the compiled tauri-cli even when a later step fails
+
+      - name: Install tauri-cli
+        run: cargo tauri --version >/dev/null 2>&1 || cargo install tauri-cli --version "^2" --locked
+
+      # ---- lomod + web + proxy + Tauri ----
+      - name: Build lomod
+        run: ./scripts/build-lomod-macos.sh
+
+      - name: Build the app
+        run: ./build-tauri.sh --bundles app,dmg
+
+      - name: Upload the .dmg
+        uses: actions/upload-artifact@v7
+        with:
+          name: lomoagent-macos-arm64-${{ steps.version.outputs.version }}
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      # ---- smoke test: install the app from the .dmg and drive the basic user flow ----
+      - name: Install the app and start it
+        id: app
+        run: |
+          dmg="$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -n 1)"
+          echo "Installing from $(basename "$dmg")"
+          mnt="$(mktemp -d)"
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mnt"
+          src_app="$(ls -d "$mnt"/*.app | head -n 1)"
+          [ -n "$src_app" ] || { echo "no .app in the .dmg"; exit 1; }
+          app="/Applications/$(basename "$src_app")"
+          rm -rf "$app"
+          ditto "$src_app" "$app"
+          hdiutil detach "$mnt"
+
+          res="$app/Contents/Resources"
+          for f in proxy lomod/lomod lomod/ffmpeg lomod/exiftool web.zip sharp.zip; do
+            [ -e "$res/$f" ] || { echo "$f missing from $res"; exit 1; }
+          done
+          file "$app"/Contents/MacOS/* "$res/proxy" "$res/lomod/lomod"
+          codesign --verify --verbose "$app" || echo "::warning::codesign --verify failed for $app"
+          # lomod shells out to these; exiftool also needs its bundled perl modules
+          "$res/lomod/exiftool" -ver
+          "$res/lomod/ffmpeg" -hide_banner -version | sed -n 1p
+          du -sh "$app" "$res"/*
+
+          exe="$(find "$app/Contents/MacOS" -type f -perm -u+x | head -n 1)"
+          echo "Starting $exe"
+          nohup "$exe" > "$RUNNER_TEMP/app.log" 2>&1 &
+          echo "pid=$!" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        run: |
+          # First run: the app's data dir is fresh, so its photos dir is the default
+          # <data dir>/photos, and setup puts the admin's home under it.
+          export ADMIN_HOME="$HOME/Library/Application Support/com.lomoware.photoviewer/photos/admin"
+          node scripts/ci/smoke-test.mjs
+          kill -0 ${{ steps.app.outputs.pid }} || { echo "the app exited during the smoke test"; exit 1; }
+
+      - name: App logs
+        if: always() && steps.app.outcome != 'skipped'
+        run: |
+          echo "::group::app stdout/stderr"
+          tail -n 80 "$RUNNER_TEMP/app.log" || true
+          echo "::endgroup::"
+          data_dir="$HOME/Library/Application Support/com.lomoware.photoviewer"
+          find "$data_dir" -name '*.log' 2>/dev/null | while read -r f; do
+            echo "::group::$f"
+            tail -n 80 "$f"
+            echo "::endgroup::"
+          done
+          pgrep -lf 'lomod|proxy' || true
+          [ -n "${{ steps.app.outputs.pid }}" ] && kill ${{ steps.app.outputs.pid }} 2>/dev/null || true
+          pkill -f 'Resources/lomod/lomod' || true
+          pkill -f 'Resources/proxy' || true

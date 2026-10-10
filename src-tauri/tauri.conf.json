@@ -25,7 +25,6 @@
     ],
     "resources": {
       "resources/lomod/": "lomod/",
-      "resources/proxy.exe": "proxy.exe",
       "resources/web.zip": "web.zip",
       "resources/sharp.zip": "sharp.zip"
     }

@@ -20,6 +20,11 @@ use tauri::Manager;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Bundled executables (resource dir): proxy.exe and lomod\lomod.exe on Windows, proxy and
+/// lomod/lomod on macOS.
+const PROXY_EXE: &str = if cfg!(windows) { "proxy.exe" } else { "proxy" };
+const LOMOD_EXE: &str = if cfg!(windows) { "lomod.exe" } else { "lomod" };
+
 const LOMOD_PORT: u16 = 8000;
 const PROXY_PORT: u16 = 3001;
 
@@ -518,7 +523,7 @@ fn run_startup(
     let clean_resource = clean_path(&resource_dir);
     let clean_data = clean_path(&data_dir);
     let web_path = clean_data.join("web");
-    let proxy_path = clean_resource.join("proxy.exe");
+    let proxy_path = clean_resource.join(PROXY_EXE);
     let log_content = format!(
         "resource_dir (raw): {:?}\nresource_dir (clean): {:?}\ndata_dir: {:?}\nweb_dir: {:?}\nweb_dir exists: {}\nproxy.exe exists: {}\nindex.html exists: {}\n",
         resource_dir,
@@ -1253,10 +1258,10 @@ fn start_lomod(
     photos_dir: &std::path::Path,
 ) -> Option<Child> {
     let lomod_dir = clean_path(&resource_dir.join("lomod"));
-    let lomod_exe = lomod_dir.join("lomod.exe");
+    let lomod_exe = lomod_dir.join(LOMOD_EXE);
 
     if !lomod_exe.exists() {
-        eprintln!("[tauri] lomod.exe not found at {:?}, skipping", lomod_exe);
+        eprintln!("[tauri] {} not found at {:?}, skipping", LOMOD_EXE, lomod_exe);
         return None;
     }
 
@@ -1421,11 +1426,11 @@ fn start_proxy(
     data_dir: &std::path::Path,
     backend_url: &str,
 ) -> Option<Child> {
-    let proxy_exe = clean_path(&resource_dir.join("proxy.exe"));
+    let proxy_exe = clean_path(&resource_dir.join(PROXY_EXE));
     let web_dir = clean_path(&data_dir.join("web"));
 
     if !proxy_exe.exists() {
-        eprintln!("[tauri] proxy.exe not found at {:?}, skipping", proxy_exe);
+        eprintln!("[tauri] {} not found at {:?}, skipping", PROXY_EXE, proxy_exe);
         return None;
     }
 

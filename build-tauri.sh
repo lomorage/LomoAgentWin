@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # ============================================================
-# Build Lomo Photo Viewer — Tauri v2 Desktop App (GitBash)
+# Build Lomo Photo Viewer — Tauri v2 Desktop App (macOS, or GitBash on Windows)
 # ============================================================
 # Usage:
 #   ./build-tauri.sh              # Full build (web + proxy + tauri)
 #   ./build-tauri.sh --skip-web   # Skip web frontend rebuild
 #   ./build-tauri.sh --skip-proxy # Skip proxy rebuild
 #   ./build-tauri.sh --dev        # Debug build (faster, no installer)
+#   ./build-tauri.sh --build-lomod  # macOS: also build lomod (scripts/build-lomod-macos.sh)
+#   ./build-tauri.sh --bundles dmg  # Only these bundle types (default: tauri.<os>.conf.json)
 #   ./build-tauri.sh --help       # Show help
+#
+# On macOS it builds for the host architecture (arm64 on Apple Silicon, x86_64 on Intel).
 # ============================================================
 
 set -euo pipefail
@@ -19,6 +23,27 @@ export PATH="$HOME/.cargo/bin:$PATH"
 SKIP_WEB=false
 SKIP_PROXY=false
 DEV_BUILD=false
+BUILD_LOMOD=false
+BUNDLES=""
+
+# Platform-specific names: pkg target, sharp's prebuilt package, bundled executables.
+case "$(uname -s)" in
+  Darwin)
+    IS_MACOS=true
+    case "$(uname -m)" in
+      arm64)  PKG_TARGET=node22-macos-arm64; SHARP_PLATFORM=darwin-arm64 ;;
+      x86_64) PKG_TARGET=node22-macos-x64;   SHARP_PLATFORM=darwin-x64 ;;
+      *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+    esac
+    EXE_SUFFIX="" ;;
+  *)
+    IS_MACOS=false
+    PKG_TARGET=node22-win-x64
+    SHARP_PLATFORM=win32-x64
+    EXE_SUFFIX=".exe" ;;
+esac
+PROXY_EXE="proxy${EXE_SUFFIX}"
+LOMOD_EXE="lomod${EXE_SUFFIX}"
 
 # ---- helpers ----
 info() { echo -e "\033[36m$*\033[0m"; }
@@ -26,11 +51,18 @@ step() { echo -e "\n\033[33m--- $* ---\033[0m"; }
 ok()   { echo -e "\033[32m$*\033[0m"; }
 err()  { echo -e "\033[31mERROR: $*\033[0m" >&2; }
 
-for arg in "$@"; do
+while [ $# -gt 0 ]; do
+  arg="$1"
+  shift
   case $arg in
     --skip-web)   SKIP_WEB=true ;;
     --skip-proxy) SKIP_PROXY=true ;;
     --dev)        DEV_BUILD=true ;;
+    --build-lomod) BUILD_LOMOD=true ;;
+    --bundles)
+      [ $# -gt 0 ] || { err "--bundles needs a value, e.g. --bundles dmg"; exit 1; }
+      BUNDLES="$1"
+      shift ;;
     --help|-h)
       echo "Build Lomo Photo Viewer Tauri App"
       echo ""
@@ -40,6 +72,9 @@ for arg in "$@"; do
       echo "  --skip-web    Skip rebuilding the Immich web frontend"
       echo "  --skip-proxy  Skip rebuilding the proxy executable"
       echo "  --dev         Build in debug mode (faster, no installer)"
+      echo "  --build-lomod macOS: build lomod from submodules/lomod first"
+      echo "                (scripts/build-lomod-macos.sh; needs go + Homebrew vips etc.)"
+      echo "  --bundles <b> Only build these bundle types, e.g. dmg or app,dmg"
       echo "  --help        Show this help message"
       echo ""
       echo "Prerequisites:"
@@ -47,7 +82,8 @@ for arg in "$@"; do
       echo "  - Rust toolchain (rustup)"
       echo "  - cargo tauri-cli v2  (cargo install tauri-cli --version '^2')"
       echo ""
-      echo "src-tauri/resources/lomod/lomod.exe must exist (extract from lomoagent.msi)"
+      echo "src-tauri/resources/lomod/$LOMOD_EXE must exist: on Windows extract it from"
+      echo "lomoagent.msi; on macOS build it with --build-lomod"
       exit 0 ;;
     *)
       err "Unknown option: $arg  (use --help for usage)"
@@ -63,9 +99,10 @@ if [ "$SKIP_WEB" = false ]; then
   cd "$SCRIPT_DIR/submodules/immich/web"
 
   echo "Installing dependencies..."
+  # Only the web app and its workspace dependencies (@immich/sdk), not the whole monorepo.
   # engine-strict=false: web/.npmrc turns it on, which makes pnpm fail on Windows over
   # exiftool-vendored.pl (os: !win32), a dependency of server/e2e that the web app never uses.
-  pnpm install --force --config.engine-strict=false
+  pnpm install --filter "immich-web..." --config.engine-strict=false
 
   # CRITICAL: clean both build/ and .svelte-kit/ to prevent stale cache
   # The web app imports @immich/sdk from its compiled build/ dir, which a fresh clone lacks
@@ -113,11 +150,15 @@ if [ "$SKIP_PROXY" = false ]; then
   npx esbuild server.ts --bundle --platform=node --target=node20 \
     --outfile=dist/server.cjs --external:sharp
 
-  echo "Packaging with pkg..."
-  npx pkg dist/server.cjs --targets node22-win-x64 --output dist/proxy.exe
+  echo "Packaging with pkg ($PKG_TARGET)..."
+  npx pkg dist/server.cjs --targets "$PKG_TARGET" --output "dist/$PROXY_EXE"
+  if [ "$IS_MACOS" = true ] && ! codesign --verify "dist/$PROXY_EXE" 2>/dev/null; then
+    # Apple Silicon won't run an unsigned binary; ad-hoc sign it if pkg didn't.
+    codesign --force --sign - "dist/$PROXY_EXE"
+  fi
 
-  cp dist/proxy.exe "$SCRIPT_DIR/src-tauri/resources/proxy.exe"
-  ok "proxy.exe copied to src-tauri/resources/"
+  cp "dist/$PROXY_EXE" "$SCRIPT_DIR/src-tauri/resources/$PROXY_EXE"
+  ok "$PROXY_EXE copied to src-tauri/resources/"
 
   # ---- Create sharp.zip (preserves node_modules directory structure) ----
   echo "Creating sharp.zip..."
@@ -125,16 +166,17 @@ if [ "$SKIP_PROXY" = false ]; then
   SHARP_STAGING="$SCRIPT_DIR/proxy/dist/sharp_staging"
   rm -rf "$SHARP_STAGING"
   mkdir -p "$SHARP_STAGING/node_modules/sharp/lib"
-  mkdir -p "$SHARP_STAGING/node_modules/@img/sharp-win32-x64/lib"
+  mkdir -p "$SHARP_STAGING/node_modules/@img/sharp-$SHARP_PLATFORM/lib"
 
   cp node_modules/sharp/lib/*             "$SHARP_STAGING/node_modules/sharp/lib/"
   cp node_modules/sharp/package.json      "$SHARP_STAGING/node_modules/sharp/"
-  cp node_modules/@img/sharp-win32-x64/lib/* \
-                                          "$SHARP_STAGING/node_modules/@img/sharp-win32-x64/lib/"
-  cp node_modules/@img/sharp-win32-x64/package.json \
-                                          "$SHARP_STAGING/node_modules/@img/sharp-win32-x64/"
+  cp node_modules/@img/sharp-$SHARP_PLATFORM/lib/* \
+                                          "$SHARP_STAGING/node_modules/@img/sharp-$SHARP_PLATFORM/lib/"
+  cp node_modules/@img/sharp-$SHARP_PLATFORM/package.json \
+                                          "$SHARP_STAGING/node_modules/@img/sharp-$SHARP_PLATFORM/"
 
-  for dep in detect-libc semver @img/colour; do
+  # On macOS, libvips itself is a separate package (Windows has it in sharp-win32-x64/lib).
+  for dep in detect-libc semver @img/colour "@img/sharp-libvips-$SHARP_PLATFORM"; do
     src="node_modules/$dep"
     if [ -e "$src" ]; then
       mkdir -p "$SHARP_STAGING/node_modules/$(dirname "$dep")"
@@ -155,8 +197,8 @@ fi
 # Sync proxy resources to existing target dirs
 for target_dir in "$SCRIPT_DIR/src-tauri/target/release" "$SCRIPT_DIR/src-tauri/target/debug"; do
   if [ -d "$target_dir" ]; then
-    [ -f "$SCRIPT_DIR/src-tauri/resources/proxy.exe" ] && \
-      cp "$SCRIPT_DIR/src-tauri/resources/proxy.exe" "$target_dir/proxy.exe"
+    [ -f "$SCRIPT_DIR/src-tauri/resources/$PROXY_EXE" ] && \
+      cp "$SCRIPT_DIR/src-tauri/resources/$PROXY_EXE" "$target_dir/$PROXY_EXE"
     [ -f "$SCRIPT_DIR/src-tauri/resources/sharp.zip" ] && \
       cp "$SCRIPT_DIR/src-tauri/resources/sharp.zip" "$target_dir/sharp.zip"
   fi
@@ -164,12 +206,23 @@ done
 ok "Proxy resources synced to existing target directories"
 
 # ---- Step 3: Verify lomo-backend files ----
+if [ "$BUILD_LOMOD" = true ]; then
+  if [ "$IS_MACOS" != true ]; then
+    err "--build-lomod is for macOS; on Windows use .\\build-tauri.ps1 -BuildLomod"
+    exit 1
+  fi
+  step "Step 3: Building lomod from submodules/lomod"
+  "$SCRIPT_DIR/scripts/build-lomod-macos.sh"
+fi
 step "Step 3: Verifying lomo-backend files"
-LOMOD_EXE="$SCRIPT_DIR/src-tauri/resources/lomod/lomod.exe"
-if [ -f "$LOMOD_EXE" ]; then
-  ok "lomod.exe: OK"
+LOMOD_PATH="$SCRIPT_DIR/src-tauri/resources/lomod/$LOMOD_EXE"
+if [ -f "$LOMOD_PATH" ]; then
+  ok "$LOMOD_EXE: OK"
+elif [ "$IS_MACOS" = true ]; then
+  err "$LOMOD_EXE not found at $LOMOD_PATH -- build it with --build-lomod"
+  exit 1
 else
-  err "lomod.exe not found at $LOMOD_EXE"
+  err "$LOMOD_EXE not found at $LOMOD_PATH"
   echo "Extract lomoagent.msi and copy lomod/ contents to src-tauri/resources/lomod/:"
   echo "  msiexec /a lomoagent.msi /qn TARGETDIR=C:\\temp\\msi-extract"
   echo "  cp -r /c/temp/msi-extract/PFiles/Lomoware/Lomoagent/lomod/* src-tauri/resources/lomod/"
@@ -180,17 +233,22 @@ fi
 step "Step 4: Building Tauri application"
 cd "$SCRIPT_DIR"
 
+TAURI_ARGS=()
+[ "$DEV_BUILD" = true ] && TAURI_ARGS+=(--debug)
+[ -n "$BUNDLES" ] && TAURI_ARGS+=(--bundles "$BUNDLES")
 if [ "$DEV_BUILD" = true ]; then
   echo "Building in debug mode..."
-  cargo tauri build --debug
 else
   echo "Building release..."
-  cargo tauri build
 fi
+# ${arr[@]+...}: an empty array trips set -u in macOS's bash 3.2
+cargo tauri build ${TAURI_ARGS[@]+"${TAURI_ARGS[@]}"}
 
 # ---- Done ----
 info "\n=== Build complete! ==="
 if [ "$DEV_BUILD" = false ]; then
-  ls -lh src-tauri/target/release/bundle/msi/*.msi      2>/dev/null && true
-  ls -lh src-tauri/target/release/bundle/nsis/*-setup.exe 2>/dev/null && true
+  ls -lh src-tauri/target/release/bundle/msi/*.msi      2>/dev/null || true
+  ls -lh src-tauri/target/release/bundle/nsis/*-setup.exe 2>/dev/null || true
+  ls -lh src-tauri/target/release/bundle/dmg/*.dmg        2>/dev/null || true
+  ls -ld src-tauri/target/release/bundle/macos/*.app      2>/dev/null || true
 fi

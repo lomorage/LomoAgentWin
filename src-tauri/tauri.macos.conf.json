@@ -1,0 +1,11 @@
+{
+  "bundle": {
+    "targets": ["app", "dmg"],
+    "resources": {
+      "resources/proxy": "proxy"
+    },
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  }
+}
