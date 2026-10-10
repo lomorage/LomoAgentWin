@@ -27,7 +27,7 @@ Lomo Photo Viewer 是一个 Windows 桌面照片浏览器，桌面外壳由 Taur
 在 PowerShell 中运行：
 
 ```powershell
-irm https://github.com/lomorage/LomoAgentWin/releases/latest/download/install.ps1 | iex
+irm https://github.com/lomorage/lomoagent/releases/latest/download/install.ps1 | iex
 ```
 
 这条命令会自动下载最新版本、静默安装并在完成后启动程序。

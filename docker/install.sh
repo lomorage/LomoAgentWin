@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-command install of Lomo Photo Viewer (Docker) on a Linux machine:
 #
-#   curl -fsSL https://raw.githubusercontent.com/lomorage/LomoAgentWin/main/docker/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/lomorage/lomoagent/main/docker/install.sh | bash
 #
 # Installs Docker if it is missing, writes docker-compose.yml + .env into LOMO_DIR, pulls the
 # image, starts it, and prints the address to open and the first account's password. Running
