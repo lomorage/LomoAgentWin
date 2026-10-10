@@ -12,7 +12,7 @@
 ## 快速开始：一条命令安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lomorage/LomoAgentWin/main/docker/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lomorage/lomoagent/main/docker/install.sh | bash
 ```
 
 脚本会依次完成：
@@ -39,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/lomorage/LomoAgentWin/main/docker/i
 **可选设置**：通过环境变量传给脚本，例如把照片放到大硬盘上。如果是无人值守安装，也可以直接指定密码，这样就跳过网页设置：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lomorage/LomoAgentWin/main/docker/install.sh \
+curl -fsSL https://raw.githubusercontent.com/lomorage/lomoagent/main/docker/install.sh \
   | LOMO_PHOTOS_DIR=/mnt/disk/photos LOMO_ADMIN_PASSWORD='你的密码' bash
 ```
 
@@ -66,7 +66,7 @@ curl -fsSL https://raw.githubusercontent.com/lomorage/LomoAgentWin/main/docker/i
 
 ```bash
 mkdir lomo && cd lomo
-curl -fsSLO https://raw.githubusercontent.com/lomorage/LomoAgentWin/main/docker/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/lomorage/lomoagent/main/docker/docker-compose.yml
 docker compose up -d
 docker compose logs
 ```

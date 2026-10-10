@@ -1,5 +1,5 @@
 param(
-    [string]$Repo = 'lomorage/LomoAgentWin',
+    [string]$Repo = 'lomorage/lomoagent',
     [string]$Tag = 'latest',
     [switch]$DownloadOnly,
     [switch]$NoLaunch

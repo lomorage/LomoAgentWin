@@ -1,5 +1,5 @@
 param(
-    [string]$Repo = 'lomorage/LomoAgentWin',
+    [string]$Repo = 'lomorage/lomoagent',
     [string]$Tag,
     [string]$InstallerPath,
     [string]$ScriptPath = 'install.ps1'

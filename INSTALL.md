@@ -5,7 +5,7 @@
 Open **PowerShell** and run:
 
 ```powershell
-irm https://github.com/lomorage/LomoAgentWin/releases/latest/download/install.ps1 | iex
+irm https://github.com/lomorage/lomoagent/releases/latest/download/install.ps1 | iex
 ```
 
 This will:
@@ -16,7 +16,7 @@ This will:
 
 > **Note:** If your system blocks script execution, run PowerShell as Administrator or prepend the bypass flag:
 > ```powershell
-> powershell -ExecutionPolicy Bypass -Command "irm https://github.com/lomorage/LomoAgentWin/releases/latest/download/install.ps1 | iex"
+> powershell -ExecutionPolicy Bypass -Command "irm https://github.com/lomorage/lomoagent/releases/latest/download/install.ps1 | iex"
 > ```
 
 ---
@@ -25,13 +25,13 @@ This will:
 
 ### NSIS installer (`.exe`)
 
-1. Go to the [latest release](https://github.com/lomorage/LomoAgentWin/releases/latest)
+1. Go to the [latest release](https://github.com/lomorage/lomoagent/releases/latest)
 2. Download `LomoPhotoViewer_*_x64-setup.exe`
 3. Double-click the file and follow the prompts
 
 ### MSI package (`.msi`)
 
-1. Go to the [latest release](https://github.com/lomorage/LomoAgentWin/releases/latest)
+1. Go to the [latest release](https://github.com/lomorage/lomoagent/releases/latest)
 2. Download `LomoPhotoViewer_*_x64_en-US.msi`
 3. Double-click to install, or deploy silently via:
    ```powershell
