@@ -18,7 +18,8 @@ name: Build Windows installer
 
 on:
   push:
-    branches: [main, "claude/**"]
+    # Not main: merging doesn't start a build; run this workflow by hand on main instead.
+    branches: ["claude/**"]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
