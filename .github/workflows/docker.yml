@@ -2,21 +2,19 @@
 # proxy), runs scripts/ci/docker-smoke.sh against it, and only then pushes it to
 # ghcr.io/<owner>/lomo-photo-viewer.
 #
-# Tags pushed:
-#   push to a claude/** branch, or a manual run on a branch (main is never built on push)
-#                        -> <branch> and sha-<commit>
-#   tag docker-vX.Y.Z    -> X.Y.Z and latest, plus a GitHub Release
-#   tag docker-vX.Y.Z-*  -> X.Y.Z-* and test, plus a GitHub pre-release (a test version)
-# Pull requests build and test but push nothing. A manual run (Actions -> Docker image -> Run
-# workflow) with release_tag set does what pushing that tag does, and tags the commit it built.
+# It runs only when a release/** branch is created or pushed to, and when started by hand
+# (Actions -> Docker image -> Run workflow); not on main, other branches or PRs.
+#
+# Image tags pushed:
+#   any run              -> <branch> (release/1.0 -> release-1.0) and sha-<commit>
+#   release_tag docker-vX.Y.Z    -> also X.Y.Z and latest, plus a GitHub Release
+#   release_tag docker-vX.Y.Z-*  -> also X.Y.Z-* and test, plus a GitHub pre-release
+# (release_tag is a manual-run input; the release tags the commit it built.)
 name: Docker image
 
 on:
   push:
-    # Not main: merging doesn't start a build; run this workflow by hand on main instead.
-    branches: ["claude/**"]
-    tags: ["docker-v*"]
-  pull_request:
+    branches: ["release/**"]
   workflow_dispatch:
     inputs:
       release_tag:
