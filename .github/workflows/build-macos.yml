@@ -1,10 +1,12 @@
-# Builds the macOS app (lomorage.app, in a .dmg) from source, once for Apple Silicon (arm64)
-# and once for Intel (x86_64), each natively on a runner of that architecture: the Immich web
-# frontend (submodules/immich), the proxy (proxy/), lomod (submodules/lomod, with
-# libvips/ffmpeg/exiftool from Homebrew bundled into the app) and the Tauri shell.
+# Builds the macOS app (lomorage.app, in a .dmg) for Apple Silicon (arm64) from source, natively
+# on an arm64 runner: the Immich web frontend (submodules/immich), the proxy (proxy/), lomod
+# (submodules/lomod, with libvips/ffmpeg/exiftool from Homebrew bundled into the app) and the
+# Tauri shell. The .dmg runs on the runner's macOS version and later, since the bundled
+# Homebrew dylibs are built for it (the release notes state the minimum).
 #
-# Each .dmg runs on the macOS version of its runner and later, since the bundled Homebrew
-# dylibs are built for it.
+# Intel (x86_64) builds the same way on macos-15-intel (add it to the matrix), but lomod
+# crashes there at startup until submodules/lomod vendors golang.org/x/sys a76c4d0 or later:
+# older x/sys calls libc through an ABI wrapper on darwin/amd64 under Go's register ABI.
 #
 # The app is ad-hoc signed, not signed with a Developer ID or notarized: a copy downloaded
 # with a browser is blocked by Gatekeeper until its quarantine flag is cleared
@@ -15,17 +17,26 @@
 # admin account, sign in, upload a photo, timeline + thumbnail + full-size preview).
 #
 # Like build-windows.yml, it runs when a release/** branch is created or pushed to, and when
-# started by hand (Actions -> Build macOS app -> Run workflow).
+# started by hand (Actions -> Build macOS app -> Run workflow). A manual run with release_tag
+# macos-vX.Y.Z (X.Y.Z = "version" in src-tauri/tauri.conf.json) also publishes a GitHub
+# Release with the .dmg, tagging the commit it built; macos-vX.Y.Z-<suffix> publishes a
+# pre-release. Neither is marked the repo's latest release, which stays the Windows one
+# (install.ps1 and the README's install command download from releases/latest).
 name: Build macOS app
 
 on:
   push:
-    branches: ["release/**", "claude/macos-arm64-build"] # TEMP: test runs on this branch
+    branches: ["release/**"]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Also publish a release with this tag, e.g. macos-v1.0.21 (release) or macos-v1.0.21-test.1 (pre-release); X.Y.Z must match tauri.conf.json. Empty: build and test only."
+        required: false
+        default: ""
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ inputs.release_tag || github.ref }}
+  cancel-in-progress: ${{ !inputs.release_tag }}
 
 jobs:
   build:
@@ -35,11 +46,13 @@ jobs:
         include:
           - arch: arm64
             runner: macos-latest # Apple Silicon
-          - arch: x86_64
-            runner: macos-15-intel
+          # - arch: x86_64           # Intel: see the note at the top
+          #   runner: macos-15-intel
     name: build (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    permissions:
+      contents: write # for the release on release_tag
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
@@ -56,7 +69,23 @@ jobs:
         run: |
           # Everything builds for the host's architecture, so the runner must match the entry.
           [ "$(uname -m)" = "${{ matrix.arch }}" ] || { echo "runner is $(uname -m), expected ${{ matrix.arch }}"; exit 1; }
-          echo "version=$(node -p 'require("./src-tauri/tauri.conf.json").version')" >> "$GITHUB_OUTPUT"
+          version="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # The release tag, on a manual run with release_tag: macos-vX.Y.Z -> release,
+          # macos-vX.Y.Z-<anything> -> pre-release.
+          tag="$(echo "$RELEASE_TAG" | xargs)"
+          prerelease=false
+          if [ -n "$tag" ]; then
+            case "$tag" in
+              "macos-v$version") ;;
+              "macos-v$version"-*) prerelease=true ;;
+              *) echo "Release tag $tag doesn't match tauri.conf.json version $version (use macos-v$version or macos-v$version-<suffix>)"; exit 1 ;;
+            esac
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
 
       # ---- toolchains ----
       - uses: actions/setup-node@v6
@@ -98,6 +127,16 @@ jobs:
           # The hosted macOS runner has 7 GB of RAM, and Node's default heap limit on it is too
           # small for the Immich web build (vite), which then aborts with "heap out of memory".
           NODE_OPTIONS: --max-old-space-size=5120
+
+      - name: Minimum macOS version
+        id: minos
+        run: |
+          # The highest deployment target among the bundled Mach-O files (Homebrew's dylibs are
+          # built for the runner's macOS); the app won't load on anything older.
+          minos="$(find src-tauri/resources/lomod -type f \( -perm -u+x -o -name '*.dylib' \) -print0 |
+            xargs -0 otool -l 2>/dev/null | awk '$1 == "minos" { print $2 }' | sort -t. -k1,1n -k2,2n | tail -n 1)"
+          echo "Bundled binaries need macOS ${minos:-?} or later"
+          echo "minos=${minos:-11.0}" >> "$GITHUB_OUTPUT"
 
       - name: Upload the .dmg
         uses: actions/upload-artifact@v7
@@ -164,3 +203,24 @@ jobs:
           [ -n "${{ steps.app.outputs.pid }}" ] && kill ${{ steps.app.outputs.pid }} 2>/dev/null || true
           pkill -f 'Resources/lomod/lomod' || true
           pkill -f 'Resources/proxy' || true
+
+      - name: GitHub Release
+        if: steps.version.outputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
+          # The repo's "latest" release stays the Windows one: install.ps1 and the README's
+          # install command download from releases/latest.
+          make_latest: false
+          files: src-tauri/target/release/bundle/dmg/*.dmg
+          body: |
+            LomoAgent ${{ steps.version.outputs.version }} for macOS on Apple Silicon (M1 or later), macOS ${{ steps.minos.outputs.minos }} or later. Intel Macs aren't supported yet.
+
+            1. Download the `.dmg` below, open it and drag **lomorage** to **Applications**.
+            2. The app isn't signed with an Apple Developer ID yet, so macOS blocks a downloaded copy ("damaged" / "can't be opened"). Clear the download flag once, in Terminal:
+               ```
+               xattr -dr com.apple.quarantine /Applications/lomorage.app
+               ```
+            3. Open **lomorage** from Applications and set up your photo library.
