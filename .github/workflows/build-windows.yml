@@ -6,22 +6,20 @@
 #
 # Every run uploads the installer as a workflow artifact, then installs it on the runner,
 # starts the app and runs scripts/ci/smoke-test.mjs against it (web UI loads, create the
-# admin account, sign in, upload a photo, timeline + thumbnail + full-size preview). Pushing a tag vX.Y.Z (matching
-# "version" in src-tauri/tauri.conf.json) also creates a *draft* GitHub Release with the
-# installers and install.ps1 attached; publish it by hand once checked, since install.ps1
-# installs whatever the latest published release is. A test tag vX.Y.Z-<suffix> (e.g.
-# v1.0.21-test.1, same X.Y.Z as tauri.conf.json) publishes a pre-release instead, which
-# install.ps1 never picks. The same releases can be made without pushing a tag: run this
-# workflow by hand (Actions -> Build Windows installer -> Run workflow) with release_tag set;
-# the release then tags the commit it was built from.
+# admin account, sign in, upload a photo, timeline + thumbnail + full-size preview).
+#
+# It runs only when a release/** branch is created or pushed to, and when started by hand
+# (Actions -> Build Windows installer -> Run workflow); not on main, other branches or PRs.
+# A manual run with release_tag set also publishes a GitHub Release, tagging the commit it
+# built: vX.Y.Z (matching "version" in src-tauri/tauri.conf.json) makes a *draft* with the
+# installer and install.ps1 attached, to publish by hand once checked, since install.ps1
+# installs whatever the latest published release is; vX.Y.Z-<suffix> (e.g. v1.0.21-test.1)
+# publishes a pre-release, which install.ps1 never picks.
 name: Build Windows installer
 
 on:
   push:
-    # Not main: merging doesn't start a build; run this workflow by hand on main instead.
-    branches: ["claude/**"]
-    tags: ["v*"]
-  pull_request:
+    branches: ["release/**"]
   workflow_dispatch:
     inputs:
       release_tag:

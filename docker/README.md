@@ -166,6 +166,6 @@ docker compose pull && docker compose up -d   # 升级
 | `test` | 最新的测试版 |
 | `latest` | 最新的正式版 |
 | `X.Y.Z` / `X.Y.Z-test.N` | 固定版本 |
-| `main` | 在 `main` 分支上手动运行 workflow 时的构建 |
+| `release-…` | 对应 `release/…` 分支的最新构建 |
 
 镜像由 `.github/workflows/docker.yml` 构建。每次构建都会启动容器，跑一遍登录、上传、缩略图的冒烟测试，通过后才推送。
