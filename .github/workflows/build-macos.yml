@@ -78,6 +78,10 @@ jobs:
 
       - name: Build the app
         run: ./build-tauri.sh --bundles app,dmg
+        env:
+          # The hosted macOS runner has 7 GB of RAM, and Node's default heap limit on it is too
+          # small for the Immich web build (vite), which then aborts with "heap out of memory".
+          NODE_OPTIONS: --max-old-space-size=5120
 
       - name: Upload the .dmg
         uses: actions/upload-artifact@v7
