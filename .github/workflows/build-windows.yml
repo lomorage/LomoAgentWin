@@ -11,7 +11,9 @@
 # installers and install.ps1 attached; publish it by hand once checked, since install.ps1
 # installs whatever the latest published release is. A test tag vX.Y.Z-<suffix> (e.g.
 # v1.0.21-test.1, same X.Y.Z as tauri.conf.json) publishes a pre-release instead, which
-# install.ps1 never picks.
+# install.ps1 never picks. The same releases can be made without pushing a tag: run this
+# workflow by hand (Actions -> Build Windows installer -> Run workflow) with release_tag set;
+# the release then tags the commit it was built from.
 name: Build Windows installer
 
 on:
@@ -20,17 +22,22 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Also publish a release with this tag, e.g. v1.0.21-test.1 (pre-release) or v1.0.21 (draft); X.Y.Z must match tauri.conf.json. Empty: build and test only."
+        required: false
+        default: ""
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: ${{ github.workflow }}-${{ inputs.release_tag || github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') && !inputs.release_tag }}
 
 jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 120
     permissions:
-      contents: write # for the draft release on tags
+      contents: write # for the release on tags / release_tag
     defaults:
       run:
         shell: pwsh
@@ -49,12 +56,18 @@ jobs:
         run: |
           $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
           "version=$version" >> $env:GITHUB_OUTPUT
+          # The release tag: the pushed v* tag, or release_tag on a manual run; none otherwise.
+          $tag = "$env:RELEASE_TAG".Trim()
+          if (-not $tag -and $env:GITHUB_REF -like 'refs/tags/v*') { $tag = $env:GITHUB_REF_NAME }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
           # vX.Y.Z -> draft release; vX.Y.Z-<anything> (e.g. v1.0.21-test.1) -> published pre-release
-          $prerelease = $env:GITHUB_REF_NAME -like "v$version-*"
+          $prerelease = $tag -like "v$version-*"
           "prerelease=$($prerelease.ToString().ToLower())" >> $env:GITHUB_OUTPUT
-          if ($env:GITHUB_REF -like 'refs/tags/v*' -and $env:GITHUB_REF_NAME -ne "v$version" -and -not $prerelease) {
-            throw "Tag $env:GITHUB_REF_NAME doesn't match tauri.conf.json version $version"
+          if ($tag -and $tag -ne "v$version" -and -not $prerelease) {
+            throw "Release tag $tag doesn't match tauri.conf.json version $version (use v$version or v$version-<suffix>)"
           }
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
 
       # ---- toolchains ----
       - uses: actions/setup-node@v6
@@ -172,9 +185,11 @@ jobs:
           Stop-Process -Name lomod, proxy -Force -ErrorAction SilentlyContinue
 
       - name: GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.version.outputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           # A test tag publishes a pre-release right away: install.ps1 installs the latest
           # release, which never is a pre-release, so users aren't moved onto it.
           draft: ${{ steps.version.outputs.prerelease != 'true' }}

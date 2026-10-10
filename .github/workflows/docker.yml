@@ -6,7 +6,8 @@
 #   push to a branch     -> <branch> and sha-<commit>
 #   tag docker-vX.Y.Z    -> X.Y.Z and latest, plus a GitHub Release
 #   tag docker-vX.Y.Z-*  -> X.Y.Z-* and test, plus a GitHub pre-release (a test version)
-# Pull requests build and test but push nothing.
+# Pull requests build and test but push nothing. A manual run (Actions -> Docker image -> Run
+# workflow) with release_tag set does what pushing that tag does, and tags the commit it built.
 name: Docker image
 
 on:
@@ -15,10 +16,15 @@ on:
     tags: ["docker-v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Also publish a release with this tag, e.g. docker-v0.1.0-test.1 (pre-release, image :test) or docker-v0.1.0 (release, image :latest). Empty: build, test and push the branch image only."
+        required: false
+        default: ""
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: ${{ github.workflow }}-${{ inputs.release_tag || github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') && !inputs.release_tag }}
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/lomo-photo-viewer
@@ -38,11 +44,21 @@ jobs:
 
       - name: Versions
         id: version
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           # Same format as lomod's own release builds: <build time>.0.<lomod commit>
           echo "lomod=$(date -u +%Y-%m-%d.%H-%M-%S).0.$(git -C submodules/lomod rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+          # The release tag: the pushed docker-v* tag, or release_tag on a manual run; none otherwise.
+          tag="$(echo "$RELEASE_TAG" | xargs)"
+          [[ -z "$tag" && "$GITHUB_REF" == refs/tags/docker-v* ]] && tag="$GITHUB_REF_NAME"
+          if [[ -n "$tag" && ! "$tag" =~ ^docker-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::release tag '$tag' is not docker-vX.Y.Z or docker-vX.Y.Z-<suffix>"; exit 1
+          fi
           prerelease=false
-          [[ "$GITHUB_REF_NAME" == docker-v*-* ]] && prerelease=true
+          [[ "$tag" == docker-v*-* ]] && prerelease=true
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "image_version=${tag#docker-v}" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
       - id: meta
@@ -52,9 +68,9 @@ jobs:
           tags: |
             type=ref,event=branch
             type=sha,prefix=sha-
-            type=match,pattern=docker-v(.*),group=1
-            type=raw,value=test,enable=${{ startsWith(github.ref, 'refs/tags/docker-v') && steps.version.outputs.prerelease == 'true' }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/docker-v') && steps.version.outputs.prerelease == 'false' }}
+            type=raw,value=${{ steps.version.outputs.image_version }},priority=900,enable=${{ steps.version.outputs.tag != '' }}
+            type=raw,value=test,enable=${{ steps.version.outputs.tag != '' && steps.version.outputs.prerelease == 'true' }}
+            type=raw,value=latest,enable=${{ steps.version.outputs.tag != '' && steps.version.outputs.prerelease == 'false' }}
           labels: |
             org.opencontainers.image.title=Lomo Photo Viewer
             org.opencontainers.image.description=lomod photo storage with the Immich-based web app, for Linux servers
@@ -137,9 +153,11 @@ jobs:
           cache-from: type=gha
 
       - name: GitHub Release
-        if: startsWith(github.ref, 'refs/tags/docker-v')
+        if: steps.version.outputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
           files: |
             docker/install.sh
@@ -155,7 +173,7 @@ jobs:
             One-command install on a Linux machine (installs Docker if needed, then prints the web address; the first visit there sets the password of the `admin` account):
 
             ```
-            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/install.sh | LOMO_IMAGE=${{ env.IMAGE }}:${{ steps.meta.outputs.version }} bash
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/install.sh | LOMO_IMAGE=${{ env.IMAGE }}:${{ steps.meta.outputs.version }} bash
             ```
 
             Or download `docker-compose.yml` from this release and run `docker compose up -d`. Full instructions (Chinese): `README.md` below.
