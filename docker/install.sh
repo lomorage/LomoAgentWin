@@ -17,18 +17,29 @@
 #   LOMO_ADMIN_PASSWORD  first account's password                   default: generated
 #   LOMO_IMAGE           image to run          default: ghcr.io/lomorage/lomo-photo-viewer:test
 #   TZ                   time zone for photo dates                  default: this machine's
+#   LOMO_WEB_PORT        web app port                               default: 3001
+#   LOMO_LOMOD_PORT      lomod port (Lomorage mobile apps)          default: 8000
+#   LOMO_WEBDAV_PORT     lomod WebDAV port                          default: 8004
 #   LOMO_SKIP_DOCKER_INSTALL=1   fail instead of installing Docker when it is missing
 #
 # The first account is created on the first start only; changing LOMO_ADMIN_* later has no effect.
 # On a re-run, settings not given again are kept from the previous install's $LOMO_DIR/.env.
+# A default port that is already taken is replaced by a free one (and reported); a port you set
+# yourself that is taken is an error.
 set -euo pipefail
+
+# Ports given explicitly by the user (as opposed to defaults or values kept from .env)
+explicit_ports=" "
+for key in LOMO_WEB_PORT LOMO_LOMOD_PORT LOMO_WEBDAV_PORT; do
+  [ -n "${!key:-}" ] && explicit_ports+="$key "
+done
 
 LOMO_DIR="${LOMO_DIR:-$HOME/lomo}"
 if [ -f "$LOMO_DIR/.env" ]; then
   [ -r "$LOMO_DIR/.env" ] || { echo "ERROR: cannot read $LOMO_DIR/.env (installed as another user? run this as that user)" >&2; exit 1; }
   while IFS='=' read -r key value; do
     case "$key" in
-      LOMO_IMAGE|LOMO_PHOTOS_DIR|LOMO_DATA_DIR|LOMO_ADMIN_USER|LOMO_ADMIN_PASSWORD|TZ)
+      LOMO_IMAGE|LOMO_PHOTOS_DIR|LOMO_DATA_DIR|LOMO_ADMIN_USER|LOMO_ADMIN_PASSWORD|TZ|LOMO_WEB_PORT|LOMO_LOMOD_PORT|LOMO_WEBDAV_PORT)
         [ -n "${!key:-}" ] || printf -v "$key" '%s' "$value" ;;
     esac
   done < "$LOMO_DIR/.env"
@@ -38,9 +49,10 @@ LOMO_PHOTOS_DIR="${LOMO_PHOTOS_DIR:-$LOMO_DIR/photos}"
 LOMO_DATA_DIR="${LOMO_DATA_DIR:-$LOMO_DIR/data}"
 LOMO_ADMIN_USER="${LOMO_ADMIN_USER:-admin}"
 LOMO_ADMIN_PASSWORD="${LOMO_ADMIN_PASSWORD:-}"
+LOMO_WEB_PORT="${LOMO_WEB_PORT:-3001}"
+LOMO_LOMOD_PORT="${LOMO_LOMOD_PORT:-8000}"
+LOMO_WEBDAV_PORT="${LOMO_WEBDAV_PORT:-8004}"
 CONTAINER=lomo-photo-viewer
-WEB_PORT=3001
-LOMOD_PORT=8000
 
 say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mWARN:\033[0m %s\n' "$*" >&2; }
@@ -81,16 +93,30 @@ if $DOCKER compose version >/dev/null 2>&1; then
   COMPOSE="$DOCKER compose"
 fi
 
-# ---- ports (the container uses host networking) ----
+# ---- ports (the container uses host networking, so they are this machine's ports) ----
+# Something accepts connections on the port (bash's /dev/tcp, so no ss/netstat needed)
+port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+# On a re-run our own container holds the ports (kept from .env), so only check a new install.
 existing=$($DOCKER ps -aq -f "name=^${CONTAINER}$" || true)
-if [ -z "$existing" ]; then
-  for port in $WEB_PORT $LOMOD_PORT 8004; do
-    # something accepts connections on it (bash's /dev/tcp, so no ss/netstat needed)
-    if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
-      die "port $port is already in use on this machine; stop whatever uses it and run this again"
-    fi
-  done
-fi
+taken=" "
+for key in LOMO_WEB_PORT LOMO_LOMOD_PORT LOMO_WEBDAV_PORT; do
+  port="${!key}"
+  if [ -z "$existing" ] && port_busy "$port"; then
+    what="another program"
+    curl -fs -o /dev/null --max-time 2 "http://127.0.0.1:$port/status" 2>/dev/null && what="another program (it answers like a Lomorage server, lomod)"
+    case "$explicit_ports" in
+      *" $key "*) die "port $port ($key) is already used by $what; choose another, e.g. $key=$((port + 10))" ;;
+    esac
+    next=$((port + 1))
+    while port_busy "$next" || [[ "$taken" == *" $next "* ]]; do next=$((next + 1)); done
+    warn "port $port is already used by $what; using $next instead ($key=$next)"
+    printf -v "$key" '%s' "$next"
+  fi
+  taken+="${!key} "
+done
+WEB_PORT="$LOMO_WEB_PORT"
+LOMOD_PORT="$LOMO_LOMOD_PORT"
 
 # ---- configuration ----
 if [ -z "${TZ:-}" ]; then
@@ -111,6 +137,9 @@ LOMO_DATA_DIR=$LOMO_DATA_DIR
 LOMO_ADMIN_USER=$LOMO_ADMIN_USER
 LOMO_ADMIN_PASSWORD=$LOMO_ADMIN_PASSWORD
 TZ=$TZ
+LOMO_WEB_PORT=$LOMO_WEB_PORT
+LOMO_LOMOD_PORT=$LOMO_LOMOD_PORT
+LOMO_WEBDAV_PORT=$LOMO_WEBDAV_PORT
 EOF
 umask 022
 
@@ -122,13 +151,16 @@ services:
     image: ${LOMO_IMAGE}
     container_name: lomo-photo-viewer
     restart: unless-stopped
-    # Host networking: reachable at this machine's LAN IP (web 3001, lomod 8000, WebDAV 8004),
-    # discoverable by the Lomorage mobile app, and the addresses it shows are real.
+    # Host networking: reachable at this machine's LAN IP on the ports below, discoverable by
+    # the Lomorage mobile app, and the addresses it shows are real.
     network_mode: host
     environment:
       LOMO_ADMIN_USER: ${LOMO_ADMIN_USER}
       LOMO_ADMIN_PASSWORD: ${LOMO_ADMIN_PASSWORD}
       TZ: ${TZ}
+      WEB_PORT: ${LOMO_WEB_PORT}
+      LOMOD_PORT: ${LOMO_LOMOD_PORT}
+      WEBDAV_PORT: ${LOMO_WEBDAV_PORT}
     volumes:
       - ${LOMO_PHOTOS_DIR}:/photos
       - ${LOMO_DATA_DIR}:/data
@@ -149,6 +181,7 @@ else
   [ -n "$existing" ] && $DOCKER rm -f "$CONTAINER" >/dev/null
   $DOCKER run -d --name "$CONTAINER" --restart unless-stopped --network host \
     -e LOMO_ADMIN_USER="$LOMO_ADMIN_USER" -e LOMO_ADMIN_PASSWORD="$LOMO_ADMIN_PASSWORD" -e TZ="$TZ" \
+    -e WEB_PORT="$LOMO_WEB_PORT" -e LOMOD_PORT="$LOMO_LOMOD_PORT" -e WEBDAV_PORT="$LOMO_WEBDAV_PORT" \
     -v "$LOMO_PHOTOS_DIR:/photos" -v "$LOMO_DATA_DIR:/data" "$LOMO_IMAGE" >/dev/null
 fi
 

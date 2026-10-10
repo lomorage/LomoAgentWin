@@ -7,6 +7,7 @@ DATA_DIR="${LOMO_DATA_DIR:-/data}"
 PHOTOS_DIR="${LOMO_PHOTOS_DIR:-/photos}"
 LOMOD_PORT="${LOMOD_PORT:-8000}"
 WEB_PORT="${WEB_PORT:-3001}"
+WEBDAV_PORT="${WEBDAV_PORT:-8004}"
 export LOMO_DATA_DIR="$DATA_DIR" LOMO_PHOTOS_DIR="$PHOTOS_DIR" LOMOD_PORT
 
 mkdir -p "$DATA_DIR/lomod" "$DATA_DIR/proxy" "$PHOTOS_DIR"
@@ -21,7 +22,7 @@ trap 'stop; exit 0' TERM INT
 # ---- lomod: photo storage, metadata, previews; the Lomorage mobile apps talk to it directly ----
 # exiftool and ffmpeg come from the image's PATH. LOMOD_ARGS adds extra lomod flags.
 # shellcheck disable=SC2086
-lomod --mount-dir "$PHOTOS_DIR" --base "$DATA_DIR/lomod" --port "$LOMOD_PORT" ${LOMOD_ARGS:-} &
+lomod --mount-dir "$PHOTOS_DIR" --base "$DATA_DIR/lomod" --port "$LOMOD_PORT" --port-webdev "$WEBDAV_PORT" ${LOMOD_ARGS:-} &
 pids+=($!)
 
 for _ in $(seq 1 60); do
@@ -34,7 +35,9 @@ curl -fs -o /dev/null "http://127.0.0.1:$LOMOD_PORT/status" || { echo "[lomo] lo
 node /app/docker/create-admin.mjs
 
 # ---- web proxy: serves the photo web app and translates its API calls to lomod ----
+# LOMO_PIN_BACKEND: always use this container's lomod, whatever port it is on (see proxy/routes/auth.ts)
 PROXY_PORT="$WEB_PORT" \
+LOMO_PIN_BACKEND=1 \
 WEB_DIR=/app/web \
 LOMO_BACKEND_URL="http://127.0.0.1:$LOMOD_PORT" \
 CONFIG_PATH="$DATA_DIR/proxy/config.json" \

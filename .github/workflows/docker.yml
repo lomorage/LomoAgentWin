@@ -100,6 +100,20 @@ jobs:
           grep -q '^LOMO_IMAGE=lomo-photo-viewer:ci$' "$LOMO_DIR/.env" || { echo "re-run did not keep the settings"; exit 1; }
           (cd "$LOMO_DIR" && docker compose down)
 
+          # Port 8000 already taken (e.g. a native lomod): the installer moves lomod to a free port,
+          # and the web app still signs in (the proxy is pinned to the bundled lomod).
+          python3 -m http.server 8000 >/dev/null 2>&1 &
+          blocker=$!
+          export LOMO_DIR="$RUNNER_TEMP/lomo-ports"
+          out=$(LOMO_IMAGE=lomo-photo-viewer:ci bash < docker/install.sh 2>&1) || { echo "$out"; kill $blocker; exit 1; }
+          echo "$out"
+          grep -q 'port 8000 is already used' <<<"$out" || { echo "no port-conflict warning"; exit 1; }
+          grep -q '^LOMO_LOMOD_PORT=8001$' "$LOMO_DIR/.env" || { echo "lomod was not moved to 8001"; exit 1; }
+          password=$(grep -oP 'Account:  user: admin   password: \K\S+' <<<"$out")
+          [ "$(login "$password")" = 201 ] || { echo "login failed with lomod on 8001"; exit 1; }
+          (cd "$LOMO_DIR" && docker compose down)
+          kill $blocker
+
       - name: Log in to ghcr.io
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v4

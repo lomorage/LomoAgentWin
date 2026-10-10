@@ -80,9 +80,10 @@ ENV LOMO_DATA_DIR=/data \
     LOMO_PHOTOS_DIR=/photos \
     WEB_PORT=3001 \
     LOMOD_PORT=8000 \
+    WEBDAV_PORT=8004 \
     LOMO_ADMIN_USER=admin
 VOLUME ["/data", "/photos"]
-# 3001: web app; 8000: lomod (Lomorage mobile apps); 8004: lomod WebDAV
+# 3001: web app; 8000: lomod (Lomorage mobile apps); 8004: lomod WebDAV (WEB_PORT/LOMOD_PORT/WEBDAV_PORT)
 EXPOSE 3001 8000 8004
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s \

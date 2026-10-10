@@ -104,7 +104,13 @@ authRouter.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     const username = email; // Immich uses email, lomo uses username
-    const serverUrl = (req.headers['x-lomo-server'] as string) || DEFAULT_LOMO_URL;
+    // LOMO_PIN_BACKEND=1 (set by the Docker image): this proxy only fronts its own bundled lomod
+    // at LOMO_BACKEND_URL, whatever server the browser names. The web app's browser mode assumes
+    // lomod at <page host>:8000, which isn't so when the container runs lomod on another port.
+    // Unset (desktop app), the browser's choice of local or remote server is honoured.
+    const serverUrl = process.env.LOMO_PIN_BACKEND === '1'
+      ? DEFAULT_LOMO_URL
+      : (req.headers['x-lomo-server'] as string) || DEFAULT_LOMO_URL;
     const { deviceId, persist: persistDevice } = resolveLoginDevice(req);
 
     console.log(`[auth] Login attempt: user=${username}, server=${serverUrl}, device=${deviceId}`);
