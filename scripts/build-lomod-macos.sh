@@ -67,11 +67,13 @@ RICE="$(go env GOPATH)/bin/rice"
 echo "--- Building lomod ($(uname -m)) ---"
 commit="$(git -C "${LOMOD_DIR}" rev-parse --short=7 HEAD)"
 version="$(date +%Y-%m-%d.%H-%M-%S).0.${commit}"
+# -checklinkname=0: lomod's vendored golang.org/x/net reaches syscall.recvmsg & co. via
+# //go:linkname on darwin (sys_linkname.go), which Go 1.23+ refuses to link otherwise.
 (
     cd "${LOMOD_DIR}"
     CGO_ENABLED=1 CGO_CFLAGS_ALLOW="-Xpreprocessor" \
         go build -mod=vendor -v -tags "sqlite_trace trace" \
-        -ldflags "-X bitbucket.org/lomoware/lomo-backend/common/release.Version=${version}" \
+        -ldflags "-checklinkname=0 -X bitbucket.org/lomoware/lomo-backend/common/release.Version=${version}" \
         -o "${STAGE}/lomod" ./cmd/lomod
 )
 echo -n "${version}" > "${STAGE}/version.txt"
