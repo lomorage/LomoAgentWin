@@ -151,6 +151,10 @@ async function main() {
   }
   if (after < 1) fail('the uploaded photo never showed up in the timeline buckets');
   ok(`timeline lists the uploaded photo (${after} asset)`);
+  res = await proxy('/api/lomo/refresh', { method: 'POST' });
+  await expectStatus(res, [204], 'POST /api/lomo/refresh');
+  if ((await bucketCount()) !== after) fail('the timeline changed after the Refresh button cleared the cache');
+  ok('Refresh button endpoint clears the timeline cache');
 
   // 8. Its thumbnail (lomod renders the preview with libvips)
   res = await proxy(`/api/assets/${encodeURIComponent(id)}/thumbnail?size=thumbnail`);
