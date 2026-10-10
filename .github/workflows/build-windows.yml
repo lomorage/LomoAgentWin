@@ -9,7 +9,9 @@
 # admin account, sign in, upload a photo, timeline + thumbnail + full-size preview). Pushing a tag vX.Y.Z (matching
 # "version" in src-tauri/tauri.conf.json) also creates a *draft* GitHub Release with the
 # installers and install.ps1 attached; publish it by hand once checked, since install.ps1
-# installs whatever the latest published release is.
+# installs whatever the latest published release is. A test tag vX.Y.Z-<suffix> (e.g.
+# v1.0.21-test.1, same X.Y.Z as tauri.conf.json) publishes a pre-release instead, which
+# install.ps1 never picks.
 name: Build Windows installer
 
 on:
@@ -47,7 +49,10 @@ jobs:
         run: |
           $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
           "version=$version" >> $env:GITHUB_OUTPUT
-          if ($env:GITHUB_REF -like 'refs/tags/v*' -and $env:GITHUB_REF_NAME -ne "v$version") {
+          # vX.Y.Z -> draft release; vX.Y.Z-<anything> (e.g. v1.0.21-test.1) -> published pre-release
+          $prerelease = $env:GITHUB_REF_NAME -like "v$version-*"
+          "prerelease=$($prerelease.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          if ($env:GITHUB_REF -like 'refs/tags/v*' -and $env:GITHUB_REF_NAME -ne "v$version" -and -not $prerelease) {
             throw "Tag $env:GITHUB_REF_NAME doesn't match tauri.conf.json version $version"
           }
 
@@ -166,11 +171,14 @@ jobs:
           if ("${{ steps.app.outputs.pid }}") { Stop-Process -Id ${{ steps.app.outputs.pid }} -Force -ErrorAction SilentlyContinue }
           Stop-Process -Name lomod, proxy -Force -ErrorAction SilentlyContinue
 
-      - name: Draft GitHub Release
+      - name: GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          draft: true
+          # A test tag publishes a pre-release right away: install.ps1 installs the latest
+          # release, which never is a pre-release, so users aren't moved onto it.
+          draft: ${{ steps.version.outputs.prerelease != 'true' }}
+          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
           files: |
             src-tauri/target/release/bundle/nsis/*-setup.exe
             install.ps1

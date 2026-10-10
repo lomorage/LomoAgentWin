@@ -152,7 +152,7 @@ jobs:
             docker pull ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
             ```
 
-            One-command install on a Linux machine (installs Docker if needed, then prints the web address and the first account's password):
+            One-command install on a Linux machine (installs Docker if needed, then prints the web address; the first visit there sets the password of the `admin` account):
 
             ```
             curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/install.sh | LOMO_IMAGE=${{ env.IMAGE }}:${{ steps.meta.outputs.version }} bash
